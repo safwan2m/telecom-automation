@@ -1,0 +1,306 @@
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_ADMIN_USER}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_ADMIN_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - influxdb
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+
+  # ── 5G Core ───────────────────────────────────────────────────────────────
+
+  core-sim:
+    build:
+      context: ./simulators/core
+    container_name: core-sim
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+
+  # ── Planning API ─────────────────────────────────────────────────────────
+
+  planning-api:
+    build:
+      context: ../planning
+    container_name: planning-api
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      CONTROLLER_URL: http://controller:8080
+
+  # ── KPI Agent ────────────────────────────────────────────────────────────
+
+  kpi-agent:
+    build:
+      context: ../agents/kpi_agent
+    container_name: kpi-agent
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      CONTROLLER_URL: http://controller:8080
+      POLL_INTERVAL_SEC: "30"
+      OVERLOAD_PRB_PCT: "85"
+      UNDERLOAD_PRB_PCT: "20"
+      SINR_MIN_DB: "5"
+
+  # ── Orchestrator Agent ────────────────────────────────────────────────────
+
+  orchestrator:
+    build:
+      context: ../agents/orchestrator
+    container_name: orchestrator
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GEMINI_MODEL: gemini-2.5-flash
+      CONTROLLER_URL: http://controller:8080
+      PLANNING_URL: http://planning-api:8081
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+
+  # ── Controller (single control plane) ────────────────────────────────────
+
+  controller:
+    build:
+      context: ./simulators/controller
+    container_name: controller
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config
+
+  # ── Centralised Units ─────────────────────────────────────────────────────
+
+  cu-north:
+    build:
+      context: ./simulators/cu
+    container_name: cu-north
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      CU_ID: CU-NORTH
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  cu-south:
+    build:
+      context: ./simulators/cu
+    container_name: cu-south
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      CU_ID: CU-SOUTH
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  # ── Distributed Units ─────────────────────────────────────────────────────
+
+  du-north-1:
+    build:
+      context: ./simulators/du
+    container_name: du-north-1
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-NORTH-1
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  du-north-2:
+    build:
+      context: ./simulators/du
+    container_name: du-north-2
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-NORTH-2
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  du-central:
+    build:
+      context: ./simulators/du
+    container_name: du-central
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-CENTRAL
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  du-east-1:
+    build:
+      context: ./simulators/du
+    container_name: du-east-1
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-EAST-1
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  du-south-1:
+    build:
+      context: ./simulators/du
+    container_name: du-south-1
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-SOUTH-1
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  du-south-2:
+    build:
+      context: ./simulators/du
+    container_name: du-south-2
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-SOUTH-2
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+volumes:
+  influxdb_data:
+  influxdb_config:
+  grafana_data:

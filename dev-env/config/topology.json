@@ -1,0 +1,205 @@
+{
+  "version": 3,
+  "last_updated": "2026-05-24T17:18:27.772332+00:00",
+  "updated_by": "move_cell:BLR_KRM_01",
+  "cus": {
+    "CU-NORTH": {
+      "host": "cu-north",
+      "region": "North/Central Bangalore",
+      "du_ids": [
+        "DU-NORTH-1",
+        "DU-NORTH-2",
+        "DU-CENTRAL"
+      ]
+    },
+    "CU-SOUTH": {
+      "host": "cu-south",
+      "region": "South/East Bangalore",
+      "du_ids": [
+        "DU-EAST-1",
+        "DU-SOUTH-1",
+        "DU-SOUTH-2"
+      ]
+    }
+  },
+  "dus": {
+    "DU-NORTH-1": {
+      "cu_id": "CU-NORTH",
+      "host": "du-north-1",
+      "cell_ids": [
+        "BLR_KRM_02",
+        "BLR_KRM_01"
+      ]
+    },
+    "DU-NORTH-2": {
+      "cu_id": "CU-NORTH",
+      "host": "du-north-2",
+      "cell_ids": [
+        "BLR_IND_01",
+        "BLR_IND_02",
+        "BLR_HBL_01"
+      ]
+    },
+    "DU-CENTRAL": {
+      "cu_id": "CU-NORTH",
+      "host": "du-central",
+      "cell_ids": [
+        "BLR_MGR_01",
+        "BLR_YPR_01"
+      ]
+    },
+    "DU-EAST-1": {
+      "cu_id": "CU-SOUTH",
+      "host": "du-east-1",
+      "cell_ids": [
+        "BLR_WFD_01",
+        "BLR_WFD_02"
+      ]
+    },
+    "DU-SOUTH-1": {
+      "cu_id": "CU-SOUTH",
+      "host": "du-south-1",
+      "cell_ids": [
+        "BLR_ELC_01",
+        "BLR_ELC_02"
+      ]
+    },
+    "DU-SOUTH-2": {
+      "cu_id": "CU-SOUTH",
+      "host": "du-south-2",
+      "cell_ids": [
+        "BLR_HSR_01",
+        "BLR_JYN_01",
+        "BLR_BNS_01"
+      ]
+    }
+  },
+  "cells": {
+    "BLR_KRM_01": {
+      "area": "Koramangala",
+      "pci": 1,
+      "lat": 12.9352,
+      "lon": 77.6245,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 300
+    },
+    "BLR_KRM_02": {
+      "area": "Koramangala",
+      "pci": 4,
+      "lat": 12.938,
+      "lon": 77.628,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 250
+    },
+    "BLR_IND_01": {
+      "area": "Indiranagar",
+      "pci": 7,
+      "lat": 12.9719,
+      "lon": 77.6412,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 280
+    },
+    "BLR_IND_02": {
+      "area": "Indiranagar",
+      "pci": 10,
+      "lat": 12.975,
+      "lon": 77.644,
+      "band": "n41",
+      "freq_mhz": 2500,
+      "max_ues": 200
+    },
+    "BLR_HBL_01": {
+      "area": "Hebbal",
+      "pci": 37,
+      "lat": 13.0358,
+      "lon": 77.597,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 260
+    },
+    "BLR_MGR_01": {
+      "area": "MG Road",
+      "pci": 25,
+      "lat": 12.9757,
+      "lon": 77.6011,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 250
+    },
+    "BLR_YPR_01": {
+      "area": "Yeshwanthpur",
+      "pci": 34,
+      "lat": 13.021,
+      "lon": 77.555,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 300
+    },
+    "BLR_WFD_01": {
+      "area": "Whitefield",
+      "pci": 13,
+      "lat": 12.9698,
+      "lon": 77.75,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 350
+    },
+    "BLR_WFD_02": {
+      "area": "Whitefield",
+      "pci": 16,
+      "lat": 12.972,
+      "lon": 77.755,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 300
+    },
+    "BLR_ELC_01": {
+      "area": "Electronic City",
+      "pci": 19,
+      "lat": 12.8399,
+      "lon": 77.677,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 400
+    },
+    "BLR_ELC_02": {
+      "area": "Electronic City",
+      "pci": 22,
+      "lat": 12.842,
+      "lon": 77.68,
+      "band": "n41",
+      "freq_mhz": 2500,
+      "max_ues": 350
+    },
+    "BLR_HSR_01": {
+      "area": "HSR Layout",
+      "pci": 28,
+      "lat": 12.9116,
+      "lon": 77.6474,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 280
+    },
+    "BLR_JYN_01": {
+      "area": "Jayanagar",
+      "pci": 31,
+      "lat": 12.9258,
+      "lon": 77.5938,
+      "band": "n28",
+      "freq_mhz": 700,
+      "max_ues": 400
+    },
+    "BLR_BNS_01": {
+      "area": "Banashankari",
+      "pci": 40,
+      "lat": 12.9255,
+      "lon": 77.549,
+      "band": "n78",
+      "freq_mhz": 3500,
+      "max_ues": 270
+    }
+  }
+}
