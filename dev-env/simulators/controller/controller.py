@@ -14,7 +14,6 @@ DU and CU simulators poll that file and reconfigure themselves live.
 
 import json
 import os
-import time
 import shutil
 import logging
 import tempfile

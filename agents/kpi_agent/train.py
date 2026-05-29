@@ -16,7 +16,6 @@ is added within each sequence so the LSTM learns *trends*, not just
 point-in-time snapshots.
 """
 
-import os
 import logging
 import numpy as np
 import torch

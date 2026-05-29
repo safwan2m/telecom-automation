@@ -44,7 +44,6 @@ def allocate(
 
     # Enforce minimum PRB guarantees
     prb: dict[str, float] = {}
-    remaining = 1.0
     for s in slices:
         prb[s] = max(norm[s], MIN_PRB[s])
 

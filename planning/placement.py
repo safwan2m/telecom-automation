@@ -4,7 +4,6 @@ Uses haversine distance for geographic proximity decisions.
 """
 
 import math
-from typing import Any
 
 # Bangalore candidate cell sites with density weights
 CANDIDATE_CELLS: list[dict] = [

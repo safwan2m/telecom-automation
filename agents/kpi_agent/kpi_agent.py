@@ -23,8 +23,6 @@ from collections import deque, defaultdict
 import httpx
 import torch
 import torch.nn.functional as F
-import numpy as np
-from datetime import datetime, timezone
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -166,10 +164,6 @@ def extract_features(c: dict) -> list[float]:
 def infer(model: KPIClassifier, buf: deque) -> tuple[int, float]:
     """Return (class_idx, confidence) for one cell's history buffer."""
     seq = list(buf)
-    # Pad with the first reading if buffer not yet full
-    while len(seq) < SEQ_LEN:
-        seq.insert(0, seq[0])
-
     x = torch.tensor([normalise(step) for step in seq],
                      dtype=torch.float32).unsqueeze(0)   # (1, SEQ_LEN, N_FEATURES)
     with torch.no_grad():

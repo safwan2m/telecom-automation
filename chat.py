@@ -108,10 +108,6 @@ def main():
                     content = msg.get("content", "")
                     if isinstance(content, str):
                         print(f"  [{role}] {content[:200]}")
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                print(f"  [{role}] {block['text'][:200]}")
             except Exception:
                 print(raw)
             print()
