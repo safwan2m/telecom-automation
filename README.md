@@ -1,6 +1,6 @@
 # Telecom Network Automation
 
-An AI agent system for automated 5G network planning, deployment, and continuous optimization. Accepts geographic and operational parameters and autonomously plans RU/DU/CU placement, applies topology changes live, and continuously monitors KPIs — all controllable through a natural language chat interface.
+An AI agent system for automated 4G/5G NSA network planning, deployment, and continuous optimization across Bangalore. Accepts geographic and operational parameters and autonomously plans cell placement, applies live topology changes, monitors KPIs with a bidirectional LSTM model, and serves a live interactive map — all controllable through a natural language chat interface.
 
 Built as an IISc course project demonstrating end-to-end O-RAN-aligned network automation.
 
@@ -9,51 +9,62 @@ Built as an IISc course project demonstrating end-to-end O-RAN-aligned network a
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│              Orchestrator Agent  :8082               │
-│         Gemini 2.5 Flash  +  tool-calling            │
-│   /chat (streaming)  /history  /tools  /health       │
-└────────┬──────────────────┬───────────────┬──────────┘
-         │                  │               │
-  ┌──────▼──────┐   ┌───────▼──────┐  ┌────▼──────────┐
-  │ Planning API│   │  Controller  │  │   KPI Agent   │
-  │    :8081    │   │    :8080     │  │  (background) │
-  │  /plan      │   │  /network    │  │  LSTM model   │
-  │  /plan/apply│   │  /move/cell  │  │  + alerting   │
-  └──────┬──────┘   └───────┬──────┘  └────┬──────────┘
-         │                  │              │
-  ┌──────▼──────────────────▼──────────────▼──────────┐
-  │                  InfluxDB  :8086                   │
-  │  cell_kpi | du_kpi | cu_kpi | core_kpi            │
-  │  ue_mobility | ue_usage | alerts | topo_events     │
-  └──────────────────────┬────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│               Orchestrator Agent  :8082                      │
+│          Gemini 2.5 Flash  +  tool-calling (streaming)       │
+└────────┬───────────────┬───────────────┬─────────────────────┘
+         │               │               │
+  ┌──────▼──────┐  ┌─────▼──────┐  ┌────▼──────────┐
+  │ Planning    │  │ Controller │  │  KPI Agent    │
+  │ Agent :8081 │  │ Agent :8080│  │  (background) │
+  └──────┬──────┘  └─────┬──────┘  └────┬──────────┘
+         │               │              │
+  ┌──────▼───────────────▼──────────────▼──────────┐
+  │                 InfluxDB  :8086                 │
+  └──────────────────────┬─────────────────────────┘
                          │  topology.json
-           ┌─────────────┼─────────────┐
-     ┌─────▼─────┐ ┌─────▼─────┐ ┌────▼──────┐
-     │ 6× DU sims│ │ 2× CU sims│ │ Core sim  │
-     │ (RAN/L2)  │ │(RRC/PDCP) │ │(AMF/SMF)  │
-     └───────────┘ └───────────┘ └───────────┘
+           ┌─────────────┼───────────────────┐
+     ┌─────▼──────┐ ┌────▼──────┐ ┌──────────▼────┐
+     │ 14× DU sims│ │ 4× CU sims│ │  Core sim     │
+     └────────────┘ └───────────┘ └───────────────┘
+                         │
+                  ┌──────▼──────┐
+                  │ Map Server  │
+                  │   :8083     │
+                  └─────────────┘
 ```
 
-### Deployment topology
+### Bangalore deployment topology
 
-14 cells across 9 Bangalore areas, grouped under 6 DUs and 2 CUs:
+48 cells across 18 zones, grouped into 14 DUs under 4 CUs:
 
-| CU | DUs under it | Areas served |
+| CU | DUs | Areas |
 |---|---|---|
-| CU-NORTH | DU-NORTH-1, DU-NORTH-2, DU-CENTRAL | Koramangala, Indiranagar, Yeshwanthpur, MG Road, Hebbal |
-| CU-SOUTH | DU-EAST-1, DU-SOUTH-1, DU-SOUTH-2 | Whitefield, Electronic City, HSR Layout, Jayanagar, Banashankari |
+| CU-NORTH | DU-NORTH-1/2/3/4 | Hebbal, Yelahanka, Sadashivanagar, Yeshwanthpur, Rajajinagar, Vijayanagar |
+| CU-CENTRAL | DU-CENTRAL-1/2/3 | MG Road, Indiranagar, Koramangala |
+| CU-EAST | DU-EAST-1/2/3/4 | Whitefield, Marathahalli, KR Puram, Bellandur |
+| CU-SOUTH | DU-SOUTH-1/2/3 | Electronic City, Jayanagar, BTM Layout, Banashankari, JP Nagar |
 
-All containers stream KPIs to InfluxDB every 10 seconds. Topology changes propagate within 5 seconds via file-watch polling on `topology.json`.
+**RAN:** 4G/5G NSA — LTE anchor + 5G NR secondary, shared AMF/SMF/UPF core.  
+**Vendor split (25% each — 12 cells per vendor):**
+
+| Vendor | 5G Hardware | 4G Hardware | Peak DL | Max UEs | System Power |
+|---|---|---|---|---|---|
+| Nokia | AirScale MAA 64T64R | AWHFA | 3800 Mbps | 800 | 1000 W |
+| Ericsson | AIR 6449 / AIR 3221 | RBS 6402 | 3600 Mbps | 750 | 950 W |
+| Samsung | TM500 64T64R | RRU | 3400 Mbps | 700 | 900 W |
+| ZTE | AAU 5614 | RRU | 3200 Mbps | 680 | 1000 W |
+
+All containers stream KPIs to InfluxDB every 10 seconds. Topology changes propagate within 5 seconds.
 
 ---
 
 ## Components
 
-### Orchestrator Agent (`agents/orchestrator/`)
-FastAPI service on **port 8082**. Accepts natural language from an operator, routes to tools via Gemini function-calling, and streams the response. Injects a live network snapshot into every system prompt so the model always has current state.
+### Orchestrator Agent (`agents/orchestrator/`) — port 8082
+Accepts natural language from an operator, routes to tools via Gemini function-calling, and streams responses. Injects a live network snapshot into every system prompt.
 
-**Tools available to the LLM:**
+**Available tools:**
 
 | Tool | What it does |
 |---|---|
@@ -66,50 +77,55 @@ FastAPI service on **port 8082**. Accepts natural language from an operator, rou
 | `apply_plan` | Push an accepted plan to the Controller |
 | `get_alerts` | Recent KPI alerts from InfluxDB |
 
-### Controller / Core DB (`dev-env/simulators/controller/`)
-Single control plane on **port 8080**. Serves as the source of truth for topology (backed by `topology.json`). Merges live InfluxDB KPIs into every GET response. Atomic topology writes propagate to all DU/CU containers.
+### Controller Agent (`agents/controller/`) — port 8080
+Single control plane and source of truth (backed by `topology.json`). Merges live KPIs from InfluxDB into every GET response. Atomic topology writes propagate to all DU/CU containers.
 
-### Planning Engine (`planning/`)
-FastAPI service on **port 8081**. Takes network parameters and runs four algorithms in sequence:
+### Planning Agent (`agents/planning/`) — port 8081
+Takes network parameters and runs four algorithms in sequence:
+1. **Placement** — density-weighted heuristic with Haversine distance
+2. **PCI planner** — graph-coloring (collision and confusion free)
+3. **Slice allocator** — PRB budget per slice (eMBB / URLLC / mMTC)
+4. **DU/CU grouping** — geographic proximity with configurable capacity limits
 
-1. **Placement** — density-weighted heuristic cell placement with Haversine distance
-2. **PCI planner** — graph-coloring algorithm (collision and confusion free)
-3. **Slice allocator** — PRB budget allocation per slice (eMBB / URLLC / mMTC)
-4. **DU/CU grouping** — geographic proximity grouping with configurable capacity limits
-
-### KPI Monitoring Agent (`agents/kpi_agent/`)
-Background process (no exposed port). Polls InfluxDB every 30 seconds per cell and classifies state using a local bidirectional LSTM model. Takes autonomous corrective actions.
+### KPI Monitoring Agent (`agents/kpi_agent/`) — background
+Polls InfluxDB every 30 seconds. Maintains a 6-step (60 s) sliding window per cell and classifies state using a local bidirectional LSTM model. Takes autonomous corrective actions.
 
 **AI model — bidirectional LSTM classifier:**
-- Input: sliding window of 6 consecutive KPI readings per cell (60 seconds of history)
-- Features: `prb_dl_pct`, `sinr_db`, `connected_ues`, `power_w`, `packet_loss_pct`, `throughput_dl_mbps`
+- Input: 6 consecutive KPI readings × 6 features = 60 seconds of history per cell
+- Features: `prb_dl_pct`, `sinr_db`, `connected_ues`, `power_w`, `packet_loss_pct`, `dl_throughput_mbps`
 - Architecture: 2-layer BiLSTM (hidden=64) → MLP head → 5-class softmax
 - Classes: `NORMAL`, `OVERLOAD`, `UNDERLOAD`, `SINR_LOW`, `POWER_WASTE`
 - Trained from synthetic data at container startup (~3 min); weights cached to `kpi_model.pt`
-- Falls back to rule-based detection (tagged `[RULE]`) for the first 60 seconds while the buffer fills; switches to model inference (tagged `[AI]`) once 6 readings accumulate
+- Falls back to rule-based detection (tagged `[RULE]`) for first 60 s; switches to model (tagged `[AI]`) once buffer fills
 
 **Autonomous actions:**
 - `OVERLOAD` (PRB > 85%) → calls `POST /move/cell` to rebalance load
-- `SINR_LOW` (SINR < 5 dB) → writes `CRITICAL` alert to InfluxDB
+- `SINR_LOW` (SINR < 5 dB) → writes `CRITICAL` alert
 - `UNDERLOAD` (PRB < 20%) → writes `INFO` alert (sleep candidate)
-- `POWER_WASTE` → writes `WARNING` alert
+- `POWER_WASTE` (high power, very few UEs) → writes `WARNING` alert
+
+### Map Server (`agents/map_server/`) — port 8083
+Serves a Leaflet.js interactive map of all 48 cells on a dark Bangalore basemap. Auto-refreshes every 30 seconds. Filter by vendor or generation; click any cell for full KPI details.
+
+- **Colour by vendor:** Nokia=blue, Ericsson=green, Samsung=purple, ZTE=orange
+- **Opacity by generation:** 5G NR = solid, 4G LTE = faded
+- **Status fill:** red = overloaded (PRB > 85%), amber = SINR low (< 5 dB)
+- **Click popup:** vendor, hardware model, band, DU/CU, PCI, connected UEs, PRB, SINR, RSRP, power, throughput
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-
 - Docker Desktop (with Compose v2)
-- A Google AI Studio API key (free tier): [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+- Google AI Studio API key (free tier): [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 
 ### 1. Configure environment
 
 ```bash
 cp dev-env/.env.example dev-env/.env
+# Edit dev-env/.env and fill in all values
 ```
-
-Edit `dev-env/.env` and fill in your values:
 
 ```
 INFLUXDB_ADMIN_USER=admin
@@ -128,23 +144,22 @@ cd dev-env
 docker compose up --build
 ```
 
-First startup builds all images. The KPI agent trains its LSTM model in the background (~3 minutes). All 15 containers will be running:
+First startup builds all images and trains the KPI LSTM model (~3 minutes). All 26 containers start in dependency order.
 
-| Container | Port | Purpose |
-|---|---|---|
-| `influxdb` | 8086 | Time-series KPI storage |
-| `grafana` | 3000 | Dashboards (admin / your password) |
-| `controller` | 8080 | Topology control plane |
-| `planning-api` | 8081 | Network planning engine |
-| `orchestrator` | 8082 | LLM chat agent |
-| `core-sim` | — | AMF/SMF/UPF simulator |
-| `cu-north`, `cu-south` | — | CU simulators |
-| `du-north-1/2`, `du-central`, `du-east-1`, `du-south-1/2` | — | DU simulators |
-| `kpi-agent` | — | KPI monitoring + anomaly detection |
+| Service | URL |
+|---|---|
+| Live cell map | http://localhost:8083 |
+| Chat interface | `py chat.py` or `POST http://localhost:8082/chat` |
+| Grafana dashboards | http://localhost:3000 (admin / your password) |
+| Controller API | http://localhost:8080 |
+| Planning API | http://localhost:8081 |
+| InfluxDB UI | http://localhost:8086 |
 
-### 3. Chat with the network
+### 3. Open the map
 
-**Option A — terminal chat client:**
+Navigate to **http://localhost:8083** to see all 48 cells plotted on Bangalore with live KPI colour coding. The page auto-refreshes every 30 seconds.
+
+### 4. Chat with the network
 
 ```bash
 py chat.py
@@ -152,12 +167,13 @@ py chat.py
 
 ```
 > show me all overloaded cells
-> move BLR_KRM_01 to DU-NORTH-2
-> plan a network for Whitefield with 800 users/km²
-> what alerts fired in the last hour?
+> move BLR_KRM_01 to DU-CENTRAL-2
+> plan a network for Electronic City with 1000 users/km²
+> apply the plan
+> show CRITICAL alerts from the last 2 hours
 ```
 
-**Option B — HTTP directly:**
+Or via HTTP:
 
 ```bash
 curl -N -X POST http://localhost:8082/chat \
@@ -165,18 +181,11 @@ curl -N -X POST http://localhost:8082/chat \
   -d '{"message": "show network status", "session_id": "ops1"}'
 ```
 
-### 4. View dashboards
-
-Open [http://localhost:3000](http://localhost:3000) → log in with `admin` / your `GRAFANA_PASSWORD`.
-
-InfluxDB UI is at [http://localhost:8086](http://localhost:8086).
-
 ---
 
 ## API Reference
 
 ### Orchestrator (`localhost:8082`)
-
 ```
 POST   /chat          {"message": "...", "session_id": "default"}  → streaming text
 GET    /history?session_id=default
@@ -186,27 +195,31 @@ GET    /health
 ```
 
 ### Controller (`localhost:8080`)
-
 ```
 GET    /health
 GET    /topology                           raw topology.json
 GET    /network                            full state + live KPIs
-GET    /cells?area=&du_id=&cu_id=          filtered cell list
-GET    /cells/{cell_id}                    cell detail + 30-min time series
-GET    /dus                                DU list with KPIs
-GET    /cus                                CU list with KPIs
+GET    /cells?area=&du_id=&cu_id=
+GET    /cells/{cell_id}                    30-min KPI time series
+GET    /dus
+GET    /cus
 POST   /move/cell   {"cell_id":"...", "to_du_id":"..."}
 POST   /move/du     {"du_id":"...",   "to_cu_id":"..."}
 ```
 
-### Planning API (`localhost:8081`)
-
+### Planning Agent (`localhost:8081`)
 ```
 POST   /plan          {geographic_area, expected_user_density, traffic_profile,
-                       spectrum_bands, latency_constraints,
-                       compute_resources, deployment_budget}
+                       spectrum_bands, latency_constraints, compute_resources, deployment_budget}
 POST   /plan/apply    {"plan_id": "..."}
 GET    /plan/{id}
+GET    /health
+```
+
+### Map Server (`localhost:8083`)
+```
+GET    /             Leaflet map HTML (auto-refresh 30 s)
+GET    /api/cells    Cell list + live KPIs (JSON)
 GET    /health
 ```
 
@@ -216,23 +229,26 @@ GET    /health
 
 ```
 > what is the current network status?
-  [calls query_network, summarises cells by load and SINR]
+  → calls query_network, summarises cells by load, SINR, power
 
-> which cells are overloaded right now?
-  [calls list_cells, filters by PRB > 85%]
+> which 5G cells are overloaded right now?
+  → calls list_cells, filters by PRB > 85% and generation = 5G
 
-> move BLR_WFD_01 to DU-NORTH-1
-  [asks for confirmation, then calls move_cell]
+> move BLR_WFD_01 to DU-EAST-2
+  → asks for confirmation, then calls move_cell
 
-> plan a 5G network for Electronic City with 1000 users/km²
-  and 70% eMBB, 20% URLLC, budget $3M
-  [calls plan_network, summarises plan, asks if you want to apply it]
+> plan a 5G network for Whitefield with 800 users/km²,
+  70% eMBB, 20% URLLC, budget $3M
+  → calls plan_network, summarises plan, asks if you want to apply it
 
 > apply the plan
-  [calls apply_plan with the plan_id from above]
+  → calls apply_plan with the plan_id
 
 > show me CRITICAL alerts from the last 2 hours
-  [calls get_alerts with severity=CRITICAL, last_minutes=120]
+  → calls get_alerts with severity=CRITICAL, last_minutes=120
+
+> which Nokia cells have the highest power draw?
+  → calls query_network, filters by vendor, sorts by power_w
 ```
 
 ---
@@ -242,16 +258,19 @@ GET    /health
 | Variable | Default | Description |
 |---|---|---|
 | `GOOGLE_API_KEY` | required | Google AI Studio key for Gemini |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model to use |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
 | `INFLUXDB_TOKEN` | required | InfluxDB auth token |
 | `INFLUXDB_ORG` | `telecom` | InfluxDB organisation |
 | `INFLUXDB_BUCKET` | `telecom_metrics` | InfluxDB bucket |
-| `CONTROLLER_URL` | `http://controller:8080` | Controller API base URL |
+| `CONTROLLER_URL` | `http://controller:8080` | Controller base URL |
 | `PLANNING_URL` | `http://planning-api:8081` | Planning API base URL |
 | `POLL_INTERVAL_SEC` | `30` | KPI agent poll interval |
-| `OVERLOAD_PRB_PCT` | `85` | PRB threshold for overload detection |
-| `UNDERLOAD_PRB_PCT` | `20` | PRB threshold for underload detection |
-| `SINR_MIN_DB` | `5` | SINR floor for SINR_LOW detection |
+| `OVERLOAD_PRB_PCT` | `85` | PRB overload threshold |
+| `UNDERLOAD_PRB_PCT` | `20` | PRB underload threshold |
+| `SINR_MIN_DB` | `5` | SINR floor for SINR_LOW |
+| `POWER_WASTE_W` | `500` | Power threshold for POWER_WASTE |
+| `POWER_WASTE_MIN_UES` | `15` | Max UEs for POWER_WASTE trigger |
+| `MIN_CONFIDENCE` | `0.70` | LSTM confidence gate |
 
 ---
 
@@ -261,43 +280,50 @@ GET    /health
 telecom-automation/
 ├── agents/
 │   ├── orchestrator/          Gemini chat agent (FastAPI, port 8082)
-│   │   ├── orchestrator.py    main app + tool-calling loop
-│   │   ├── tools.py           tool implementations + JSON schemas
+│   │   ├── orchestrator.py
+│   │   ├── tools.py
 │   │   ├── Dockerfile
 │   │   └── requirements.txt
-│   └── kpi_agent/             KPI monitoring + LSTM anomaly detection
-│       ├── kpi_agent.py       polling loop, inference, alerting
-│       ├── model.py           BiLSTM model definition + normalisation
-│       ├── train.py           synthetic data generation + training
+│   ├── controller/            Topology control plane (FastAPI, port 8080)
+│   │   ├── controller.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   ├── planning/              Network planning engine (FastAPI, port 8081)
+│   │   ├── planner_api.py
+│   │   ├── placement.py
+│   │   ├── pci_planner.py
+│   │   ├── slice_allocator.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   ├── kpi_agent/             KPI monitoring + BiLSTM anomaly detection (background)
+│   │   ├── kpi_agent.py
+│   │   ├── model.py
+│   │   ├── train.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   └── map_server/            Leaflet.js live cell map (FastAPI, port 8083)
+│       ├── map_server.py
 │       ├── Dockerfile
 │       └── requirements.txt
-├── planning/                  Network planning engine (FastAPI, port 8081)
-│   ├── planner_api.py         REST endpoints
-│   ├── placement.py           cell placement algorithm
-│   ├── pci_planner.py         graph-coloring PCI assignment
-│   ├── slice_allocator.py     PRB slice allocation
-│   ├── Dockerfile
-│   └── requirements.txt
 ├── dev-env/
-│   ├── docker-compose.yml     15-container stack definition
-│   ├── .env.example           environment variable template
+│   ├── docker-compose.yml     26-container stack
+│   ├── .env.example           Environment variable template
 │   ├── config/
-│   │   └── topology.json      14-cell Bangalore topology (source of truth)
+│   │   └── topology.json      48-cell Bangalore topology (source of truth)
 │   ├── grafana/               Grafana datasource provisioning
 │   └── simulators/
-│       ├── controller/        topology control plane (port 8080)
 │       ├── core/              AMF/SMF/UPF KPI simulator
-│       ├── cu/                CU simulator (reused for CU-NORTH and CU-SOUTH)
-│       └── du/                DU simulator (reused for all 6 DUs)
-├── chat.py                    interactive terminal chat client
-├── spec.md                    full project specification
+│       ├── cu/                CU simulator (shared image for all 4 CUs)
+│       └── du/                DU simulator (shared image for all 14 DUs)
+├── chat.py                    Interactive terminal chat client
+├── spec.md                    Full project specification
 ├── prerequisites.md           O-RAN and 5G background reading
 └── CLAUDE.md                  AI assistant instructions for this repo
 ```
 
 ---
 
-## Useful commands
+## Useful Commands
 
 ```bash
 # Start everything
@@ -306,22 +332,32 @@ cd dev-env && docker compose up --build -d
 # Tail logs for a specific container
 docker logs -f kpi-agent
 docker logs -f orchestrator
+docker logs -f map-server
 
 # Stop everything
 docker compose down
 
-# Stop and wipe all volumes (reset InfluxDB state)
+# Reset all InfluxDB state (wipe volumes)
 docker compose down -v
 
 # Rebuild a single service after code changes
 docker compose up --build orchestrator
+docker compose up --build map-server
 
 # Check all container health
 docker compose ps
 
-# Query InfluxDB directly (get recent cell KPIs)
+# Query latest cell KPIs directly from InfluxDB
 curl "http://localhost:8086/api/v2/query?org=telecom" \
   -H "Authorization: Token your-influxdb-token" \
   -H "Content-Type: application/vnd.flux" \
-  -d 'from(bucket:"telecom_metrics") |> range(start:-5m) |> filter(fn:(r)=>r._measurement=="cell_kpi")'
+  -d 'from(bucket:"telecom_metrics") |> range(start:-5m) |> filter(fn:(r)=>r._measurement=="cell_kpi") |> last()'
+
+# Get raw network state from Controller
+curl http://localhost:8080/network | python -m json.tool
+
+# Trigger a manual cell move
+curl -X POST http://localhost:8080/move/cell \
+  -H "Content-Type: application/json" \
+  -d '{"cell_id":"BLR_KRM_01","to_du_id":"DU-CENTRAL-2"}'
 ```

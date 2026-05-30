@@ -61,7 +61,7 @@ services:
 
   planning-api:
     build:
-      context: ../planning
+      context: ../agents/planning
     container_name: planning-api
     restart: unless-stopped
     ports:
@@ -117,11 +117,25 @@ services:
       INFLUX_ORG: ${INFLUXDB_ORG}
       INFLUX_BUCKET: ${INFLUXDB_BUCKET}
 
+  # ── Network Map Server ────────────────────────────────────────────────────
+
+  map-server:
+    build:
+      context: ../agents/map_server
+    container_name: map-server
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    depends_on:
+      - controller
+    environment:
+      CONTROLLER_URL: http://controller:8080
+
   # ── Controller (single control plane) ────────────────────────────────────
 
   controller:
     build:
-      context: ./simulators/controller
+      context: ../agents/controller
     container_name: controller
     restart: unless-stopped
     ports:
