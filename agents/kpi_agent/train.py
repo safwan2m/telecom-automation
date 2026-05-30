@@ -31,19 +31,22 @@ EPOCHS            = 50
 BATCH_SIZE        = 256
 LR                = 1e-3
 
-# Feature order: prb_dl_pct, sinr_db, connected_ues, power_w, packet_loss_pct, throughput_dl_mbps
+# Feature order: prb_dl_pct, sinr_db, connected_ues, power_w, packet_loss_pct, dl_throughput_mbps
+# Values calibrated to mixed 4G/5G fleet (5G 64T64R: power 250–1000W, peak 3200–3800 Mbps;
+# 4G 4T4R: power 50–200W, peak 150–200 Mbps). Training distribution mirrors expected
+# proportions: ~50% 5G cells, ~50% 4G cells.
 
 _CLASS_SPECS: list[tuple[list, list]] = [
-    # Class 0  NORMAL
-    ([50,  18, 200, 150, 0.4,  500], [15, 5, 80, 30, 0.4,  150]),
-    # Class 1  OVERLOAD
-    ([92,  10, 420, 215, 7.0,  860], [ 4, 3, 55, 22, 3.5,   70]),
-    # Class 2  UNDERLOAD
-    ([10,  22,  12, 130, 0.1,   80], [ 5, 5,  6, 18, 0.1,   40]),
-    # Class 3  SINR_LOW
-    ([50,   1, 150, 175, 22.0, 190], [20, 2, 70, 30, 7.0,   90]),
-    # Class 4  POWER_WASTE
-    ([15,  22,   9, 205, 0.1,   95], [ 7, 5,  4, 28, 0.1,   45]),
+    # Class 0  NORMAL — typical mixed-load operation
+    ([52,  19, 320,  480, 0.05, 1200], [14, 4, 120, 200, 0.05,  500]),
+    # Class 1  OVERLOAD — PRB saturated, power near peak, many UEs
+    ([93,  10, 680,  920, 0.80, 3100], [ 4, 3, 80,  60, 0.40,  200]),
+    # Class 2  UNDERLOAD — very few UEs, low PRB, low power
+    ([10,  23,  18,  310, 0.01,  200], [ 5, 5,  8,  120, 0.01,  100]),
+    # Class 3  SINR_LOW — signal degraded regardless of load
+    ([52,   1, 280,  560, 1.50,  700], [20, 2, 100, 200, 0.80,  300]),
+    # Class 4  POWER_WASTE — 5G mMIMO near-idle but still drawing full RF power
+    ([14,  23,   7,  850, 0.01,  150], [ 6, 5,  3,  100, 0.01,   60]),
 ]
 
 

@@ -29,13 +29,14 @@ LABELS = {
 }
 
 # Min-value and range used for [0,1] normalisation
+# Ranges cover both 4G (lower end) and 5G NR (upper end) hardware
 FEATURE_NORM: list[tuple[float, float]] = [
-    (0.0,   100.0),    # prb_dl_pct       → 0–100 %
-    (-5.0,  35.0),     # sinr_db          → –5 to +30 dB
-    (0.0,   500.0),    # connected_ues    → 0–500
-    (0.0,   300.0),    # power_w          → 0–300 W
-    (0.0,   100.0),    # packet_loss_pct  → 0–100 %
-    (0.0,   1000.0),   # throughput_dl_mbps → 0–1000 Mbps
+    (0.0,   100.0),    # prb_dl_pct          → 0–100 %
+    (-5.0,  35.0),     # sinr_db             → –5 to +30 dB
+    (0.0,   800.0),    # connected_ues       → 0–800 (Nokia 5G NR max)
+    (0.0,   1200.0),   # power_w             → 0–1200 W (5G 64T64R full load)
+    (0.0,   5.0),      # packet_loss_pct     → 0–5 %
+    (0.0,   4000.0),   # dl_throughput_mbps  → 0–4000 Mbps (5G NR peak)
 ]
 
 

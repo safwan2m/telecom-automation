@@ -22,7 +22,7 @@ INFLUX_ORG    = os.environ.get("INFLUX_ORG", "telecom")
 INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "telecom_metrics")
 INTERVAL_SEC  = int(os.environ.get("INTERVAL_SEC", "10"))
 
-MAX_UES_TOTAL = 4440   # sum of all cell max_ues across both simulators
+MAX_UES_TOTAL = 28520  # sum of all cell max_ues: 48 cells, 4 CUs, 14 DUs
 IP_POOL_SIZE  = 65536  # /16 pool
 
 HOURLY_LOAD = [

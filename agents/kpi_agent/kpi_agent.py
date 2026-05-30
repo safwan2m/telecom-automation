@@ -45,8 +45,8 @@ MODEL_PATH     = os.environ.get("MODEL_PATH",       "kpi_model.pt")
 OVERLOAD_PRB   = float(os.environ.get("OVERLOAD_PRB_PCT",  "85"))
 UNDERLOAD_PRB  = float(os.environ.get("UNDERLOAD_PRB_PCT", "20"))
 SINR_MIN_DB    = float(os.environ.get("SINR_MIN_DB",       "5"))
-POWER_WASTE_W  = float(os.environ.get("POWER_WASTE_W",     "150"))
-POWER_WASTE_UE = int(os.environ.get("POWER_WASTE_MIN_UES", "20"))
+POWER_WASTE_W  = float(os.environ.get("POWER_WASTE_W",     "500"))   # 5G cells idle at ~250W
+POWER_WASTE_UE = int(os.environ.get("POWER_WASTE_MIN_UES", "15"))
 
 # Minimum model confidence to act (below this, log but don't act)
 MIN_CONFIDENCE = float(os.environ.get("MIN_CONFIDENCE", "0.70"))
@@ -87,7 +87,7 @@ from(bucket: "{INFLUX_BUCKET}")
   |> filter(fn: (r) => r._measurement == "cell_kpi")
   |> filter(fn: (r) => r._field == "prb_dl_pct" or r._field == "sinr_db"
                     or r._field == "connected_ues" or r._field == "power_w"
-                    or r._field == "packet_loss_pct" or r._field == "throughput_dl_mbps")
+                    or r._field == "packet_loss_pct" or r._field == "dl_throughput_mbps")
   |> last()
   |> pivot(rowKey: ["cell_id","area","du_id","cu_id"],
            columnKey: ["_field"], valueColumn: "_value")
@@ -102,12 +102,12 @@ from(bucket: "{INFLUX_BUCKET}")
                     "area":                v.get("area", ""),
                     "du_id":               v.get("du_id", ""),
                     "cu_id":               v.get("cu_id", ""),
-                    "prb_dl_pct":          float(v.get("prb_dl_pct",          0) or 0),
-                    "sinr_db":             float(v.get("sinr_db",             20) or 20),
-                    "connected_ues":       float(v.get("connected_ues",        0) or 0),
-                    "power_w":             float(v.get("power_w",              0) or 0),
-                    "packet_loss_pct":     float(v.get("packet_loss_pct",      0) or 0),
-                    "throughput_dl_mbps":  float(v.get("throughput_dl_mbps",   0) or 0),
+                    "prb_dl_pct":          float(v.get("prb_dl_pct",         0) or 0),
+                    "sinr_db":             float(v.get("sinr_db",            20) or 20),
+                    "connected_ues":       float(v.get("connected_ues",       0) or 0),
+                    "power_w":             float(v.get("power_w",             0) or 0),
+                    "packet_loss_pct":     float(v.get("packet_loss_pct",     0) or 0),
+                    "dl_throughput_mbps":  float(v.get("dl_throughput_mbps",  0) or 0),
                 })
         return rows
     except Exception as e:
@@ -155,7 +155,7 @@ def extract_features(c: dict) -> list[float]:
         c["connected_ues"],
         c["power_w"],
         c["packet_loss_pct"],
-        c["throughput_dl_mbps"],
+        c["dl_throughput_mbps"],
     ]
 
 

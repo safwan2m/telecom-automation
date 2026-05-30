@@ -1,205 +1,357 @@
 {
-  "version": 3,
-  "last_updated": "2026-05-24T17:18:27.772332+00:00",
-  "updated_by": "move_cell:BLR_KRM_01",
+  "version": 1,
+  "last_updated": "2026-05-30T00:00:00+00:00",
+  "updated_by": "initial",
+  "meta": {
+    "city": "Bangalore",
+    "population": 13000000,
+    "operator_market_share_pct": 25,
+    "operator_subscribers": 3250000,
+    "active_ues_peak": 650000,
+    "note": "48 cells represent a sample deployment covering 18 key Bangalore zones. Real network would require ~2000+ sites for single operator full-city coverage.",
+    "ran_mode": "4G/5G NSA",
+    "core": "NSA — 5G NR anchored on LTE, shared AMF/SMF/UPF"
+  },
   "cus": {
     "CU-NORTH": {
       "host": "cu-north",
-      "region": "North/Central Bangalore",
-      "du_ids": [
-        "DU-NORTH-1",
-        "DU-NORTH-2",
-        "DU-CENTRAL"
-      ]
+      "region": "North / North-West Bangalore",
+      "du_ids": ["DU-NORTH-1", "DU-NORTH-2", "DU-NORTH-3", "DU-NORTH-4"]
+    },
+    "CU-CENTRAL": {
+      "host": "cu-central",
+      "region": "Central Bangalore",
+      "du_ids": ["DU-CENTRAL-1", "DU-CENTRAL-2", "DU-CENTRAL-3"]
+    },
+    "CU-EAST": {
+      "host": "cu-east",
+      "region": "East Bangalore",
+      "du_ids": ["DU-EAST-1", "DU-EAST-2", "DU-EAST-3", "DU-EAST-4"]
     },
     "CU-SOUTH": {
       "host": "cu-south",
-      "region": "South/East Bangalore",
-      "du_ids": [
-        "DU-EAST-1",
-        "DU-SOUTH-1",
-        "DU-SOUTH-2"
-      ]
+      "region": "South Bangalore",
+      "du_ids": ["DU-SOUTH-1", "DU-SOUTH-2", "DU-SOUTH-3"]
     }
   },
   "dus": {
-    "DU-NORTH-1": {
-      "cu_id": "CU-NORTH",
-      "host": "du-north-1",
-      "cell_ids": [
-        "BLR_KRM_02",
-        "BLR_KRM_01"
-      ]
-    },
-    "DU-NORTH-2": {
-      "cu_id": "CU-NORTH",
-      "host": "du-north-2",
-      "cell_ids": [
-        "BLR_IND_01",
-        "BLR_IND_02",
-        "BLR_HBL_01"
-      ]
-    },
-    "DU-CENTRAL": {
-      "cu_id": "CU-NORTH",
-      "host": "du-central",
-      "cell_ids": [
-        "BLR_MGR_01",
-        "BLR_YPR_01"
-      ]
-    },
-    "DU-EAST-1": {
-      "cu_id": "CU-SOUTH",
-      "host": "du-east-1",
-      "cell_ids": [
-        "BLR_WFD_01",
-        "BLR_WFD_02"
-      ]
-    },
-    "DU-SOUTH-1": {
-      "cu_id": "CU-SOUTH",
-      "host": "du-south-1",
-      "cell_ids": [
-        "BLR_ELC_01",
-        "BLR_ELC_02"
-      ]
-    },
-    "DU-SOUTH-2": {
-      "cu_id": "CU-SOUTH",
-      "host": "du-south-2",
-      "cell_ids": [
-        "BLR_HSR_01",
-        "BLR_JYN_01",
-        "BLR_BNS_01"
-      ]
-    }
+    "DU-NORTH-1": { "cu_id": "CU-NORTH", "host": "du-north-1",
+      "cell_ids": ["BLR_HBL_01", "BLR_HBL_02", "BLR_YLH_01", "BLR_YLH_02"] },
+    "DU-NORTH-2": { "cu_id": "CU-NORTH", "host": "du-north-2",
+      "cell_ids": ["BLR_SDN_01", "BLR_SDN_02", "BLR_YPR_01", "BLR_YPR_02"] },
+    "DU-NORTH-3": { "cu_id": "CU-NORTH", "host": "du-north-3",
+      "cell_ids": ["BLR_RJN_01", "BLR_RJN_02", "BLR_RJN_03"] },
+    "DU-NORTH-4": { "cu_id": "CU-NORTH", "host": "du-north-4",
+      "cell_ids": ["BLR_VJN_01", "BLR_VJN_02", "BLR_VJN_03"] },
+    "DU-CENTRAL-1": { "cu_id": "CU-CENTRAL", "host": "du-central-1",
+      "cell_ids": ["BLR_MGR_01", "BLR_MGR_02", "BLR_MGR_03"] },
+    "DU-CENTRAL-2": { "cu_id": "CU-CENTRAL", "host": "du-central-2",
+      "cell_ids": ["BLR_IND_01", "BLR_IND_02", "BLR_IND_03"] },
+    "DU-CENTRAL-3": { "cu_id": "CU-CENTRAL", "host": "du-central-3",
+      "cell_ids": ["BLR_KRM_01", "BLR_KRM_02", "BLR_KRM_03", "BLR_KRM_04"] },
+    "DU-EAST-1": { "cu_id": "CU-EAST", "host": "du-east-1",
+      "cell_ids": ["BLR_WFD_01", "BLR_WFD_02", "BLR_WFD_03"] },
+    "DU-EAST-2": { "cu_id": "CU-EAST", "host": "du-east-2",
+      "cell_ids": ["BLR_MHL_01", "BLR_MHL_02", "BLR_MHL_03"] },
+    "DU-EAST-3": { "cu_id": "CU-EAST", "host": "du-east-3",
+      "cell_ids": ["BLR_KRP_01", "BLR_KRP_02", "BLR_KRP_03"] },
+    "DU-EAST-4": { "cu_id": "CU-EAST", "host": "du-east-4",
+      "cell_ids": ["BLR_BLN_01", "BLR_BLN_02", "BLR_BLN_03"] },
+    "DU-SOUTH-1": { "cu_id": "CU-SOUTH", "host": "du-south-1",
+      "cell_ids": ["BLR_ELC_01", "BLR_ELC_02", "BLR_ELC_03", "BLR_ELC_04"] },
+    "DU-SOUTH-2": { "cu_id": "CU-SOUTH", "host": "du-south-2",
+      "cell_ids": ["BLR_JYN_01", "BLR_JYN_02", "BLR_BTM_01", "BLR_BTM_02"] },
+    "DU-SOUTH-3": { "cu_id": "CU-SOUTH", "host": "du-south-3",
+      "cell_ids": ["BLR_BNS_01", "BLR_BNS_02", "BLR_JPN_01", "BLR_JPN_02"] }
   },
   "cells": {
-    "BLR_KRM_01": {
-      "area": "Koramangala",
-      "pci": 1,
-      "lat": 12.9352,
-      "lon": 77.6245,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 300
-    },
-    "BLR_KRM_02": {
-      "area": "Koramangala",
-      "pci": 4,
-      "lat": 12.938,
-      "lon": 77.628,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 250
-    },
-    "BLR_IND_01": {
-      "area": "Indiranagar",
-      "pci": 7,
-      "lat": 12.9719,
-      "lon": 77.6412,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 280
-    },
-    "BLR_IND_02": {
-      "area": "Indiranagar",
-      "pci": 10,
-      "lat": 12.975,
-      "lon": 77.644,
-      "band": "n41",
-      "freq_mhz": 2500,
-      "max_ues": 200
-    },
     "BLR_HBL_01": {
-      "area": "Hebbal",
-      "pci": 37,
-      "lat": 13.0358,
-      "lon": 77.597,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 260
+      "area": "Hebbal", "lat": 13.0358, "lon": 77.5970,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 1,
+      "vendor": "Nokia", "hardware_model": "AirScale MAA 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3800, "tx_power_w": 1000, "idle_power_w": 250, "max_ues": 800
     },
-    "BLR_MGR_01": {
-      "area": "MG Road",
-      "pci": 25,
-      "lat": 12.9757,
-      "lon": 77.6011,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 250
+    "BLR_HBL_02": {
+      "area": "Hebbal", "lat": 13.0372, "lon": 77.5998,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 202,
+      "vendor": "Ericsson", "hardware_model": "RBS 6402",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 480
+    },
+    "BLR_YLH_01": {
+      "area": "Yelahanka", "lat": 13.1007, "lon": 77.5963,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 4,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_YLH_02": {
+      "area": "Yelahanka", "lat": 13.1021, "lon": 77.5988,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 205,
+      "vendor": "ZTE", "hardware_model": "RRU B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 360
+    },
+    "BLR_SDN_01": {
+      "area": "Sadashivanagar", "lat": 13.0053, "lon": 77.5700,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 7,
+      "vendor": "Ericsson", "hardware_model": "AIR 6449",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3600, "tx_power_w": 950, "idle_power_w": 240, "max_ues": 750
+    },
+    "BLR_SDN_02": {
+      "area": "Sadashivanagar", "lat": 13.0062, "lon": 77.5728,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 208,
+      "vendor": "Samsung", "hardware_model": "RRU B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 460
     },
     "BLR_YPR_01": {
-      "area": "Yeshwanthpur",
-      "pci": 34,
-      "lat": 13.021,
-      "lon": 77.555,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 300
+      "area": "Yeshwanthpur", "lat": 13.0210, "lon": 77.5550,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 10,
+      "vendor": "ZTE", "hardware_model": "AAU 5614",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3200, "tx_power_w": 1000, "idle_power_w": 260, "max_ues": 680
+    },
+    "BLR_YPR_02": {
+      "area": "Yeshwanthpur", "lat": 13.0223, "lon": 77.5572,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 211,
+      "vendor": "Nokia", "hardware_model": "AWHFA B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 500
+    },
+    "BLR_RJN_01": {
+      "area": "Rajajinagar", "lat": 12.9940, "lon": 77.5530,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 13,
+      "vendor": "Nokia", "hardware_model": "AirScale MAA 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3800, "tx_power_w": 1000, "idle_power_w": 250, "max_ues": 800
+    },
+    "BLR_RJN_02": {
+      "area": "Rajajinagar", "lat": 12.9952, "lon": 77.5558,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 214,
+      "vendor": "ZTE", "hardware_model": "RRU B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 360
+    },
+    "BLR_RJN_03": {
+      "area": "Rajajinagar", "lat": 12.9930, "lon": 77.5510,
+      "generation": "5G", "band": "n28", "freq_mhz": 700, "pci": 16,
+      "vendor": "Ericsson", "hardware_model": "AIR 3221 FDD",
+      "antenna_config": "4T4R", "peak_dl_mbps": 870, "tx_power_w": 380, "idle_power_w": 95, "max_ues": 580
+    },
+    "BLR_VJN_01": {
+      "area": "Vijayanagar", "lat": 12.9710, "lon": 77.5380,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 19,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_VJN_02": {
+      "area": "Vijayanagar", "lat": 12.9722, "lon": 77.5408,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 217,
+      "vendor": "Nokia", "hardware_model": "AWHFA B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 400
+    },
+    "BLR_VJN_03": {
+      "area": "Vijayanagar", "lat": 12.9700, "lon": 77.5360,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 220,
+      "vendor": "ZTE", "hardware_model": "RRU B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 450
+    },
+    "BLR_MGR_01": {
+      "area": "MG Road", "lat": 12.9757, "lon": 77.6011,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 22,
+      "vendor": "Ericsson", "hardware_model": "AIR 6449",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3600, "tx_power_w": 950, "idle_power_w": 240, "max_ues": 750
+    },
+    "BLR_MGR_02": {
+      "area": "MG Road", "lat": 12.9771, "lon": 77.6033,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 223,
+      "vendor": "Nokia", "hardware_model": "AWHFA B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 500
+    },
+    "BLR_MGR_03": {
+      "area": "MG Road", "lat": 12.9745, "lon": 77.5992,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 25,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_IND_01": {
+      "area": "Indiranagar", "lat": 12.9719, "lon": 77.6412,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 28,
+      "vendor": "Nokia", "hardware_model": "AirScale MAA 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3800, "tx_power_w": 1000, "idle_power_w": 250, "max_ues": 800
+    },
+    "BLR_IND_02": {
+      "area": "Indiranagar", "lat": 12.9733, "lon": 77.6440,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 226,
+      "vendor": "Ericsson", "hardware_model": "RBS 6402 B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 380
+    },
+    "BLR_IND_03": {
+      "area": "Indiranagar", "lat": 12.9750, "lon": 77.6390,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 31,
+      "vendor": "ZTE", "hardware_model": "AAU 5614",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3200, "tx_power_w": 1000, "idle_power_w": 260, "max_ues": 680
+    },
+    "BLR_KRM_01": {
+      "area": "Koramangala", "lat": 12.9352, "lon": 77.6245,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 34,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_KRM_02": {
+      "area": "Koramangala", "lat": 12.9381, "lon": 77.6280,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 229,
+      "vendor": "Nokia", "hardware_model": "AWHFA B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 500
+    },
+    "BLR_KRM_03": {
+      "area": "Koramangala", "lat": 12.9340, "lon": 77.6222,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 37,
+      "vendor": "Ericsson", "hardware_model": "AIR 6449",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3600, "tx_power_w": 950, "idle_power_w": 240, "max_ues": 750
+    },
+    "BLR_KRM_04": {
+      "area": "Koramangala", "lat": 12.9362, "lon": 77.6262,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 232,
+      "vendor": "ZTE", "hardware_model": "RRU B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 360
     },
     "BLR_WFD_01": {
-      "area": "Whitefield",
-      "pci": 13,
-      "lat": 12.9698,
-      "lon": 77.75,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 350
+      "area": "Whitefield", "lat": 12.9698, "lon": 77.7500,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 40,
+      "vendor": "Nokia", "hardware_model": "AirScale MAA 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3800, "tx_power_w": 1000, "idle_power_w": 250, "max_ues": 800
     },
     "BLR_WFD_02": {
-      "area": "Whitefield",
-      "pci": 16,
-      "lat": 12.972,
-      "lon": 77.755,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 300
+      "area": "Whitefield", "lat": 12.9712, "lon": 77.7522,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 235,
+      "vendor": "Ericsson", "hardware_model": "RBS 6402",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 480
+    },
+    "BLR_WFD_03": {
+      "area": "Whitefield", "lat": 12.9724, "lon": 77.7548,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 43,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_MHL_01": {
+      "area": "Marathahalli", "lat": 12.9562, "lon": 77.7016,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 46,
+      "vendor": "ZTE", "hardware_model": "AAU 5614",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3200, "tx_power_w": 1000, "idle_power_w": 260, "max_ues": 680
+    },
+    "BLR_MHL_02": {
+      "area": "Marathahalli", "lat": 12.9576, "lon": 77.7040,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 238,
+      "vendor": "Samsung", "hardware_model": "RRU B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 460
+    },
+    "BLR_MHL_03": {
+      "area": "Marathahalli", "lat": 12.9550, "lon": 77.7001,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 49,
+      "vendor": "Ericsson", "hardware_model": "AIR 6449",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3600, "tx_power_w": 950, "idle_power_w": 240, "max_ues": 750
+    },
+    "BLR_KRP_01": {
+      "area": "KR Puram", "lat": 13.0074, "lon": 77.6937,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 52,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_KRP_02": {
+      "area": "KR Puram", "lat": 13.0086, "lon": 77.6952,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 241,
+      "vendor": "ZTE", "hardware_model": "RRU B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 360
+    },
+    "BLR_KRP_03": {
+      "area": "KR Puram", "lat": 13.0063, "lon": 77.6921,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 244,
+      "vendor": "ZTE", "hardware_model": "RRU B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 450
+    },
+    "BLR_BLN_01": {
+      "area": "Bellandur", "lat": 12.9257, "lon": 77.6712,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 55,
+      "vendor": "Ericsson", "hardware_model": "AIR 6449",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3600, "tx_power_w": 950, "idle_power_w": 240, "max_ues": 750
+    },
+    "BLR_BLN_02": {
+      "area": "Bellandur", "lat": 12.9271, "lon": 77.6730,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 247,
+      "vendor": "Samsung", "hardware_model": "RRU B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 460
+    },
+    "BLR_BLN_03": {
+      "area": "Bellandur", "lat": 12.9245, "lon": 77.6695,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 58,
+      "vendor": "Nokia", "hardware_model": "AirScale MAA 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3800, "tx_power_w": 1000, "idle_power_w": 250, "max_ues": 800
     },
     "BLR_ELC_01": {
-      "area": "Electronic City",
-      "pci": 19,
-      "lat": 12.8399,
-      "lon": 77.677,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 400
+      "area": "Electronic City", "lat": 12.8399, "lon": 77.6770,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 61,
+      "vendor": "ZTE", "hardware_model": "AAU 5614",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3200, "tx_power_w": 1000, "idle_power_w": 260, "max_ues": 680
     },
     "BLR_ELC_02": {
-      "area": "Electronic City",
-      "pci": 22,
-      "lat": 12.842,
-      "lon": 77.68,
-      "band": "n41",
-      "freq_mhz": 2500,
-      "max_ues": 350
+      "area": "Electronic City", "lat": 12.8416, "lon": 77.6791,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 250,
+      "vendor": "Nokia", "hardware_model": "AWHFA B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 400
     },
-    "BLR_HSR_01": {
-      "area": "HSR Layout",
-      "pci": 28,
-      "lat": 12.9116,
-      "lon": 77.6474,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 280
+    "BLR_ELC_03": {
+      "area": "Electronic City", "lat": 12.8385, "lon": 77.6756,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 64,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_ELC_04": {
+      "area": "Electronic City", "lat": 12.8410, "lon": 77.6801,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 253,
+      "vendor": "Ericsson", "hardware_model": "RBS 6402",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 480
     },
     "BLR_JYN_01": {
-      "area": "Jayanagar",
-      "pci": 31,
-      "lat": 12.9258,
-      "lon": 77.5938,
-      "band": "n28",
-      "freq_mhz": 700,
-      "max_ues": 400
+      "area": "Jayanagar", "lat": 12.9258, "lon": 77.5938,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 67,
+      "vendor": "Nokia", "hardware_model": "AirScale MAA 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3800, "tx_power_w": 1000, "idle_power_w": 250, "max_ues": 800
+    },
+    "BLR_JYN_02": {
+      "area": "Jayanagar", "lat": 12.9271, "lon": 77.5960,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 256,
+      "vendor": "Ericsson", "hardware_model": "RBS 6402",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 480
+    },
+    "BLR_BTM_01": {
+      "area": "BTM Layout", "lat": 12.9166, "lon": 77.6101,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 70,
+      "vendor": "Samsung", "hardware_model": "TM500 64T64R",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3400, "tx_power_w": 900, "idle_power_w": 225, "max_ues": 700
+    },
+    "BLR_BTM_02": {
+      "area": "BTM Layout", "lat": 12.9180, "lon": 77.6120,
+      "generation": "4G", "band": "B40", "freq_mhz": 2300, "pci": 259,
+      "vendor": "ZTE", "hardware_model": "RRU B40",
+      "antenna_config": "4T4R", "peak_dl_mbps": 200, "tx_power_w": 250, "idle_power_w": 60, "max_ues": 360
     },
     "BLR_BNS_01": {
-      "area": "Banashankari",
-      "pci": 40,
-      "lat": 12.9255,
-      "lon": 77.549,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 270
+      "area": "Banashankari", "lat": 12.9255, "lon": 77.5490,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 73,
+      "vendor": "Ericsson", "hardware_model": "AIR 6449",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3600, "tx_power_w": 950, "idle_power_w": 240, "max_ues": 750
+    },
+    "BLR_BNS_02": {
+      "area": "Banashankari", "lat": 12.9267, "lon": 77.5511,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 262,
+      "vendor": "Nokia", "hardware_model": "AWHFA B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 500
+    },
+    "BLR_JPN_01": {
+      "area": "JP Nagar", "lat": 12.9010, "lon": 77.5800,
+      "generation": "5G", "band": "n78", "freq_mhz": 3500, "pci": 76,
+      "vendor": "ZTE", "hardware_model": "AAU 5614",
+      "antenna_config": "64T64R", "peak_dl_mbps": 3200, "tx_power_w": 1000, "idle_power_w": 260, "max_ues": 680
+    },
+    "BLR_JPN_02": {
+      "area": "JP Nagar", "lat": 12.9022, "lon": 77.5820,
+      "generation": "4G", "band": "B3", "freq_mhz": 1800, "pci": 265,
+      "vendor": "Samsung", "hardware_model": "RRU B3",
+      "antenna_config": "4T4R", "peak_dl_mbps": 150, "tx_power_w": 200, "idle_power_w": 50, "max_ues": 460
     }
   }
 }
