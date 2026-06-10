@@ -6,11 +6,15 @@ Reads its cell assignments from /config/topology.json (polled every TOPO_POLL_SE
 When topology changes (cells added/removed, CU parent changes), reconfigures live
 without restarting. Writes cell_kpi, du_kpi, ue_mobility, ue_usage to InfluxDB.
 
-KPI models use real hardware specs (peak_dl_mbps, tx_power_w, idle_power_w, band)
-from the topology to produce vendor-realistic throughput and power numbers.
+UE counts are derived from the RF coverage footprint:
+  coverage_radius_m  ← COST-231-Hata path-loss model (tx_power, band, antenna)
+  coverage_area_km2  ← π·r²
+  expected_peak_ues  ← area × AREA_DENSITY × MARKET_SHARE × PEAK_CONCURRENT
+  connected_ues      ← min(expected_peak × hourly_load_factor, max_ues)
 """
 
 import json
+import math
 import os
 import time
 import random
@@ -31,7 +35,7 @@ INTERVAL_SEC  = int(os.environ.get("INTERVAL_SEC",  "10"))
 TOPO_POLL_SEC = int(os.environ.get("TOPO_POLL_SEC", "5"))
 TOPOLOGY_FILE = Path(os.environ.get("TOPOLOGY_FILE", "/config/topology.json"))
 
-# Bangalore diurnal load curve (fraction of max_ues active per hour)
+# Bangalore diurnal load curve (fraction of peak demand per hour)
 HOURLY_LOAD = [
     0.08, 0.06, 0.05, 0.05, 0.06, 0.12,
     0.32, 0.68, 0.88, 0.82, 0.72, 0.66,
@@ -39,12 +43,94 @@ HOURLY_LOAD = [
     0.95, 1.00, 0.97, 0.88, 0.62, 0.28,
 ]
 
-# SINR and RSRP baselines differ by band (at low load, clear-sky)
+# SINR and RSRP baselines by band (clear sky, low load)
 _SINR_BASE = {"n78": 22.0, "n41": 20.0, "n28": 29.0, "B3": 26.0, "B40": 23.0}
 _RSRP_BASE = {"n78": -72,  "n41": -74,  "n28": -64,  "B3": -69,  "B40": -73}
 
 SLICES = ["eMBB"] * 7 + ["URLLC"] * 2 + ["mMTC"] * 1
 
+# ── RF coverage model ─────────────────────────────────────────────────────────
+
+# Per-band: centre frequency, channel bandwidth, outdoor-to-indoor penetration loss
+_BAND_PARAMS: dict[str, dict] = {
+    "n78": {"freq_mhz": 3500, "bw_mhz": 100, "pen_loss_db": 20},
+    "n41": {"freq_mhz": 2500, "bw_mhz":  80, "pen_loss_db": 20},
+    "n28": {"freq_mhz":  700, "bw_mhz":  20, "pen_loss_db": 15},
+    "B3":  {"freq_mhz": 1800, "bw_mhz":  20, "pen_loss_db": 18},
+    "B40": {"freq_mhz": 2300, "bw_mhz":  20, "pen_loss_db": 18},
+}
+_ANT_GAIN: dict[str, float] = {
+    "64T64R": 24.0,   # 5G mMIMO beam-forming gain (dBi)
+    "4T4R":   17.0,   # conventional 4-port (dBi)
+}
+_RF_EFF: dict[str, float] = {
+    "5G": 0.22,   # ~22 % DC-to-RF for mMIMO (rest is power supply + cooling)
+    "4G": 0.32,   # ~32 % for macro 4G RRU
+}
+
+
+def compute_coverage_radius_m(
+    band: str, tx_power_w: int, generation: str, antenna_config: str
+) -> float:
+    """
+    Estimate the coverage-edge radius via COST-231-Hata Urban Macro.
+
+    Model parameters: base station height 25 m, UE height 1.5 m,
+    dense-urban correction +3 dB, UE noise figure 7 dB,
+    coverage-edge SNR threshold −3 dB.
+
+    Returns radius in metres.
+    """
+    p      = _BAND_PARAMS.get(band, _BAND_PARAMS["n78"])
+    rf_eff = _RF_EFF.get(generation, 0.25)
+    ag     = _ANT_GAIN.get(antenna_config, 17.0)
+
+    rf_w     = max(tx_power_w * rf_eff, 0.1)
+    eirp_dbm = 10 * math.log10(rf_w * 1000) + ag
+
+    noise_dbm = -174.0 + 10 * math.log10(p["bw_mhz"] * 1e6) + 7.0
+    pl_max    = eirp_dbm - (noise_dbm - 3.0) - p["pen_loss_db"]
+
+    hb  = 25.0
+    A   = 46.3 + 33.9 * math.log10(p["freq_mhz"]) - 13.82 * math.log10(hb) + 3.0
+    B   = 44.9 - 6.55 * math.log10(hb)     # ≈ 35.74 for hb = 25 m
+    d_m = (10 ** ((pl_max - A) / B)) * 1000
+    return round(d_m, 1)
+
+
+# ── Population model ──────────────────────────────────────────────────────────
+
+# People per km² for each area — calibrated so the 10-area corridor totals ~100,000 residents
+AREA_DENSITY: dict[str, float] = {
+    "Whitefield":       600,
+    "Marathahalli":     800,
+    "KR Puram":         533,
+    "Bellandur":        467,
+    "Indiranagar":     1600,
+    "Koramangala":     1429,
+    "HSR Layout":      1125,
+    "BTM Layout":      1500,
+    "Jayanagar":       1500,
+    "Electronic City":  400,
+}
+
+MARKET_SHARE    = 0.25   # operator market share
+PEAK_CONCURRENT = 0.40   # fraction of operator subscribers active at demand peak
+
+
+def coverage_expected_ues(area: str, radius_m: float, max_ues: int) -> int:
+    """
+    Peak concurrent UEs served by this cell based on its RF footprint.
+
+    = π·r² × density × market_share × peak_concurrency, capped at max_ues.
+    """
+    density  = AREA_DENSITY.get(area, 700)
+    area_km2 = math.pi * (radius_m / 1000) ** 2
+    peak     = area_km2 * density * MARKET_SHARE * PEAK_CONCURRENT
+    return min(int(peak), max_ues)
+
+
+# ── Utility ───────────────────────────────────────────────────────────────────
 
 def load_factor() -> float:
     from datetime import datetime
@@ -60,9 +146,18 @@ def read_topology() -> dict:
 
 class CellState:
     def __init__(self, cell_id: str, cfg: dict):
-        self.cell_id = cell_id
-        self.cfg     = cfg
-        n = int(cfg["max_ues"] * load_factor() * random.uniform(0.8, 1.0))
+        self.cell_id      = cell_id
+        self.cfg          = cfg
+        self.radius_m     = compute_coverage_radius_m(
+            cfg.get("band", "n78"),
+            cfg.get("tx_power_w", 950),
+            cfg.get("generation", "5G"),
+            cfg.get("antenna_config", "64T64R"),
+        )
+        expected = coverage_expected_ues(
+            cfg.get("area", ""), self.radius_m, cfg["max_ues"]
+        )
+        n = int(expected * load_factor() * random.uniform(0.8, 1.0))
         self.ue_pool: dict[str, str] = {
             f"UE-{cell_id}-{i:04d}": random.choice(SLICES) for i in range(n)
         }
@@ -72,20 +167,24 @@ class CellState:
         return len(self.ue_pool)
 
     def tick(self) -> dict:
-        c         = self.cfg
-        band      = c.get("band", "n78")
-        peak_dl   = c.get("peak_dl_mbps", 3600)
-        tx_pw     = c.get("tx_power_w", 950)
-        idle_pw   = c.get("idle_power_w", int(tx_pw * 0.25))
+        c       = self.cfg
+        band    = c.get("band", "n78")
+        peak_dl = c.get("peak_dl_mbps", 3600)
+        tx_pw   = c.get("tx_power_w", 950)
+        idle_pw = c.get("idle_power_w", int(tx_pw * 0.25))
 
+        # Target UE count from coverage-area × density × load curve
+        expected = coverage_expected_ues(
+            c.get("area", ""), self.radius_m, c["max_ues"]
+        )
         target = max(0, min(
-            int(c["max_ues"] * load_factor() * random.uniform(0.88, 1.05)),
+            int(expected * load_factor() * random.uniform(0.88, 1.05)),
             c["max_ues"],
         ))
         delta = target - self.ues
         if delta > 0:
             for _ in range(delta):
-                self.ue_pool[f"UE-{self.cell_id}-{random.randint(0, 9999):04d}"] = random.choice(SLICES)
+                self.ue_pool[f"UE-{self.cell_id}-{random.randint(0,9999):04d}"] = random.choice(SLICES)
         elif delta < 0:
             for uid in random.sample(list(self.ue_pool), min(-delta, self.ues)):
                 del self.ue_pool[uid]
@@ -94,27 +193,23 @@ class CellState:
         prb_dl = min(98.0, load * 100 * random.uniform(0.92, 1.08))
         prb_ul = min(95.0, load * 58  * random.uniform(0.88, 1.12))
 
-        # Vendor-realistic throughput from peak spec
         dl_tput = round(prb_dl / 100 * peak_dl * random.uniform(0.82, 1.18), 2)
         ul_tput = round(prb_ul / 100 * peak_dl * 0.22 * random.uniform(0.80, 1.20), 2)
 
-        # Band-specific SINR / RSRP (higher bands = shorter range = worse at cell edge)
         sinr_base = _SINR_BASE.get(band, 22.0)
         rsrp_base = _RSRP_BASE.get(band, -72)
         sinr_db   = round(sinr_base - load * 15 + random.gauss(0, 2.5), 1)
         rsrp_dbm  = round(rsrp_base - load * 22 + random.gauss(0, 3.0), 1)
 
-        # Vendor-specific power: idle + load-proportional increase
         power_w = max(
             idle_pw * 0.90,
             round(idle_pw + load * (tx_pw - idle_pw) + random.gauss(0, tx_pw * 0.025), 1),
         )
-
-        # Packet loss: near-zero at low load, rises with congestion
         pkt_loss_pct = round(max(0.0, (load - 0.75) * 2.5 + random.gauss(0, 0.05)), 3)
 
         return dict(
             connected_ues       = self.ues,
+            coverage_radius_m   = self.radius_m,
             dl_throughput_mbps  = dl_tput,
             ul_throughput_mbps  = ul_tput,
             rsrp_dbm            = rsrp_dbm,
@@ -153,7 +248,7 @@ class CellState:
             return []
         out = []
         for uid in random.sample(list(self.ue_pool), min(n, self.ues)):
-            sl = self.ue_pool[uid]
+            sl   = self.ue_pool[uid]
             peak = self.cfg.get("peak_dl_mbps", 150)
             if sl == "URLLC":
                 dl, ul = random.randint(1_000, 60_000), random.randint(500, 25_000)
@@ -161,7 +256,7 @@ class CellState:
             elif sl == "mMTC":
                 dl, ul = random.randint(10, 2_000), random.randint(10, 800)
                 lat, jit = random.uniform(10, 150), random.uniform(2, 30)
-            else:  # eMBB — scale to cell's peak capability
+            else:
                 per_ue_peak = int(peak * 1e6 / max(self.ues, 1))
                 dl = random.randint(max(50_000, per_ue_peak // 20), max(100_000, per_ue_peak // 4))
                 ul = int(dl * random.uniform(0.08, 0.22))
@@ -240,6 +335,7 @@ def build_points(states: dict[str, CellState], cu_id: str) -> list[Point]:
             .tag("vendor",      c.get("vendor", "unknown"))
             .tag("generation",  c.get("generation", "5G"))
             .field("connected_ues",       m["connected_ues"])
+            .field("coverage_radius_m",   m["coverage_radius_m"])
             .field("dl_throughput_mbps",  m["dl_throughput_mbps"])
             .field("ul_throughput_mbps",  m["ul_throughput_mbps"])
             .field("rsrp_dbm",            m["rsrp_dbm"])
@@ -317,6 +413,13 @@ def main():
     states, cu_id = reconfigure(states, topo)
     topology_changed()  # prime mtime
 
+    # Log computed coverage radii at startup
+    for cid, s in states.items():
+        log.info(
+            f"  {cid} band={s.cfg['band']} tx={s.cfg['tx_power_w']}W "
+            f"→ coverage_radius={s.radius_m:.0f} m"
+        )
+
     log.info(f"{DU_ID} → CU={cu_id}, cells={list(states)}")
     last_push = 0.0
 
@@ -333,7 +436,10 @@ def main():
                 pts = build_points(states, cu_id)
                 try:
                     write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=pts)
-                    log.info(f"Wrote {len(pts)} pts | cells={list(states)} | UEs={[s.ues for s in states.values()]}")
+                    log.info(
+                        f"Wrote {len(pts)} pts | cells={list(states)} "
+                        f"| UEs={[s.ues for s in states.values()]}"
+                    )
                 except Exception as e:
                     log.error(f"Write error: {e}")
             last_push = now

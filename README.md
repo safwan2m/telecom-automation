@@ -25,7 +25,7 @@ Built as an IISc course project demonstrating end-to-end O-RAN-aligned network a
                          │  topology.json
            ┌─────────────┼───────────────────┐
      ┌─────▼──────┐ ┌────▼──────┐ ┌──────────▼────┐
-     │ 14× DU sims│ │ 4× CU sims│ │  Core sim     │
+     │  8× DU sims│ │ 2× CU sims│ │  Core sim     │
      └────────────┘ └───────────┘ └───────────────┘
                          │
                   ┌──────▼──────┐
@@ -34,19 +34,25 @@ Built as an IISc course project demonstrating end-to-end O-RAN-aligned network a
                   └─────────────┘
 ```
 
-### Bangalore deployment topology
+### Deployment topology — South-East Bangalore Tech Corridor
 
-48 cells across 18 zones, grouped into 14 DUs under 4 CUs:
+40 cells blanket 10 areas (4 cells per area: 5G n78 + 5G n28 + 4G B3 + 4G B40), grouped into 10 DUs under 2 CUs. Active UEs peak: **1.625M** (50% of Bangalore's 13M city population at 25% operator share).
 
-| CU | DUs | Areas |
+| CU | DU | Area |
 |---|---|---|
-| CU-NORTH | DU-NORTH-1/2/3/4 | Hebbal, Yelahanka, Sadashivanagar, Yeshwanthpur, Rajajinagar, Vijayanagar |
-| CU-CENTRAL | DU-CENTRAL-1/2/3 | MG Road, Indiranagar, Koramangala |
-| CU-EAST | DU-EAST-1/2/3/4 | Whitefield, Marathahalli, KR Puram, Bellandur |
-| CU-SOUTH | DU-SOUTH-1/2/3 | Electronic City, Jayanagar, BTM Layout, Banashankari, JP Nagar |
+| CU-EAST | DU-EAST-1 | Whitefield |
+| CU-EAST | DU-EAST-2 | Marathahalli |
+| CU-EAST | DU-EAST-3 | KR Puram |
+| CU-EAST | DU-EAST-4 | Bellandur |
+| CU-SOUTH | DU-CENTRAL-1 | Indiranagar |
+| CU-SOUTH | DU-CENTRAL-2 | Koramangala |
+| CU-SOUTH | DU-SOUTH-1 | HSR Layout |
+| CU-SOUTH | DU-SOUTH-2 | BTM Layout |
+| CU-SOUTH | DU-SOUTH-3 | Jayanagar |
+| CU-SOUTH | DU-SOUTH-4 | Electronic City |
 
 **RAN:** 4G/5G NSA — LTE anchor + 5G NR secondary, shared AMF/SMF/UPF core.  
-**Vendor split (25% each — 12 cells per vendor):**
+**Vendor split (25% each — 10 cells per vendor):**
 
 | Vendor | 5G Hardware | 4G Hardware | Peak DL | Max UEs | System Power |
 |---|---|---|---|---|---|
@@ -55,7 +61,7 @@ Built as an IISc course project demonstrating end-to-end O-RAN-aligned network a
 | Samsung | TM500 64T64R | RRU | 3400 Mbps | 700 | 900 W |
 | ZTE | AAU 5614 | RRU | 3200 Mbps | 680 | 1000 W |
 
-All containers stream KPIs to InfluxDB every 10 seconds. Topology changes propagate within 5 seconds.
+All 10 DU containers stream KPIs to InfluxDB every 10 seconds. Topology changes propagate within 5 seconds.
 
 ---
 
@@ -105,7 +111,7 @@ Polls InfluxDB every 30 seconds. Maintains a 6-step (60 s) sliding window per ce
 - `POWER_WASTE` (high power, very few UEs) → writes `WARNING` alert
 
 ### Map Server (`agents/map_server/`) — port 8083
-Serves a Leaflet.js interactive map of all 48 cells on a dark Bangalore basemap. Auto-refreshes every 30 seconds. Filter by vendor or generation; click any cell for full KPI details.
+Serves a Leaflet.js interactive map of all 40 cells in the South-East Tech Corridor on a dark Bangalore basemap. Auto-refreshes every 30 seconds. Filter by vendor or generation; click any cell for full KPI details.
 
 - **Colour by vendor:** Nokia=blue, Ericsson=green, Samsung=purple, ZTE=orange
 - **Opacity by generation:** 5G NR = solid, 4G LTE = faded
@@ -144,7 +150,7 @@ cd dev-env
 docker compose up --build
 ```
 
-First startup builds all images and trains the KPI LSTM model (~3 minutes). All 26 containers start in dependency order.
+First startup builds all images and trains the KPI LSTM model (~3 minutes). All 20 containers start in dependency order.
 
 | Service | URL |
 |---|---|
@@ -157,7 +163,7 @@ First startup builds all images and trains the KPI LSTM model (~3 minutes). All 
 
 ### 3. Open the map
 
-Navigate to **http://localhost:8083** to see all 48 cells plotted on Bangalore with live KPI colour coding. The page auto-refreshes every 30 seconds.
+Navigate to **http://localhost:8083** to see all 40 cells plotted on the South-East Bangalore Tech Corridor with live KPI colour coding. The page auto-refreshes every 30 seconds.
 
 ### 4. Chat with the network
 
@@ -313,8 +319,8 @@ telecom-automation/
 │   ├── grafana/               Grafana datasource provisioning
 │   └── simulators/
 │       ├── core/              AMF/SMF/UPF KPI simulator
-│       ├── cu/                CU simulator (shared image for all 4 CUs)
-│       └── du/                DU simulator (shared image for all 14 DUs)
+│       ├── cu/                CU simulator (shared image for all 2 CUs)
+│       └── du/                DU simulator (shared image for all 10 DUs)
 ├── chat.py                    Interactive terminal chat client
 ├── spec.md                    Full project specification
 ├── prerequisites.md           O-RAN and 5G background reading

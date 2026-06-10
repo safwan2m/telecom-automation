@@ -32,13 +32,14 @@ The KPI agent, controller, or planning engine can reorganise cells at any time i
 |---|---|
 | RAN hardware | Docker containers simulating RU/DU/CU (dev); Nokia, Ericsson, Samsung, ZTE equipment specs (25% each); real O-RAN targets (prod) |
 | KPI data source | Synthetic telemetry from DU/CU/Core simulators using real hardware specs (peak_dl_mbps, tx_power_w, band-specific SINR/RSRP) → InfluxDB |
-| Geographic area | Bangalore — 48 cells across 18 zones; scaled to ~25% operator market share of 13 M city population |
+| Geographic area | South-East Bangalore Tech Corridor — 40 cells across 10 areas; 25% operator share; active_ues_peak = 50% × 13M city population = 1.625M |
 | LLM backend | Gemini API (gemini-2.5-flash), configurable via `GOOGLE_API_KEY` |
 | RAN mode | 4G/5G NSA — LTE anchor + 5G NR secondary; shared AMF/SMF/UPF core |
 | 5G architecture | Split CU/DU/RU throughout (planning engine groups DUs under CUs by proximity) |
 | Deployment target | Docker Compose (dev), Kubernetes Helm (prod) |
 | SMO | Controller REST API (dev), O-RAN-compliant SMO (prod) |
 | Live map | Leaflet.js map container (port 8083) showing all cells, vendor colours, live KPI status |
+| Geographic scope | South-East Bangalore Tech Corridor — 10 areas, 40 cells (4/area, blanket coverage), 10 DUs, 2 CUs |
 
 ---
 
@@ -65,7 +66,7 @@ The KPI agent, controller, or planning engine can reorganise cells at any time i
                          │  topology.json
            ┌─────────────┼───────────────────┐
      ┌─────▼──────┐ ┌────▼──────┐ ┌──────────▼────┐
-     │ 14× DU sims│ │ 4× CU sims│ │  Core sim     │
+     │ 10× DU sims│ │ 2× CU sims│ │  Core sim     │
      │ (4G+5G RAN)│ │(RRC/PDCP) │ │  AMF/SMF/UPF  │
      └────────────┘ └───────────┘ └───────────────┘
                          │
@@ -76,16 +77,24 @@ The KPI agent, controller, or planning engine can reorganise cells at any time i
                   └─────────────┘
 ```
 
-### Network Topology
+### Network Topology — South-East Bangalore Tech Corridor
 
-| CU | DUs | Areas |
+| CU | DUs | Area served |
 |---|---|---|
-| CU-NORTH | DU-NORTH-1/2/3/4 | Hebbal, Yelahanka, Sadashivanagar, Yeshwanthpur, Rajajinagar, Vijayanagar |
-| CU-CENTRAL | DU-CENTRAL-1/2/3 | MG Road, Indiranagar, Koramangala |
-| CU-EAST | DU-EAST-1/2/3/4 | Whitefield, Marathahalli, KR Puram, Bellandur |
-| CU-SOUTH | DU-SOUTH-1/2/3 | Electronic City, Jayanagar, BTM Layout, Banashankari, JP Nagar |
+| CU-EAST | DU-EAST-1 | Whitefield |
+| CU-EAST | DU-EAST-2 | Marathahalli |
+| CU-EAST | DU-EAST-3 | KR Puram |
+| CU-EAST | DU-EAST-4 | Bellandur |
+| CU-SOUTH | DU-CENTRAL-1 | Indiranagar |
+| CU-SOUTH | DU-CENTRAL-2 | Koramangala |
+| CU-SOUTH | DU-SOUTH-1 | HSR Layout |
+| CU-SOUTH | DU-SOUTH-2 | BTM Layout |
+| CU-SOUTH | DU-SOUTH-3 | Jayanagar |
+| CU-SOUTH | DU-SOUTH-4 | Electronic City |
 
-### Vendor Distribution (25% each — 12 cells per vendor)
+**40 cells (4 per area: 5G n78 + 5G n28 + 4G B3 + 4G B40). Every area fully covered. Cell-level max UEs: 22,050. Core active_ues_peak: 1,625,000 (50% × 13M × 25% share).**
+
+### Vendor Distribution (25% each — 10 cells per vendor)
 
 | Vendor | 5G Hardware | 4G Hardware | 5G Max UEs | 5G Peak DL | System Power |
 |---|---|---|---|---|---|
@@ -126,7 +135,7 @@ The KPI agent, controller, or planning engine can reorganise cells at any time i
 
 ### Agent 5 — Map Server (`agents/map_server/`)
 - FastAPI on port 8083
-- Serves a Leaflet.js interactive map of all 48 Bangalore cells
+- Serves a Leaflet.js interactive map of all 40 cells in the South-East Tech Corridor
 - `GET /` — HTML map page (auto-refreshes every 30 s)
 - `GET /api/cells` — proxies Controller `/network`, returns GeoJSON-ready cell list
 - Colour-coded by vendor (Nokia=blue, Ericsson=green, Samsung=purple, ZTE=orange)
@@ -142,21 +151,25 @@ The KPI agent, controller, or planning engine can reorganise cells at any time i
 | `influxdb` | 8086 | Time-series KPI storage |
 | `grafana` | 3000 | Dashboards |
 | `core-sim` | — | AMF + SMF + UPF simulator |
-| `cu-north` | — | CU-NORTH simulator |
-| `cu-central` | — | CU-CENTRAL simulator |
 | `cu-east` | — | CU-EAST simulator |
 | `cu-south` | — | CU-SOUTH simulator |
-| `du-north-1/2/3/4` | — | DU simulators (Hebbal, Yelahanka, Sadashivanagar/YPR, Rajajinagar, Vijayanagar) |
-| `du-central-1/2/3` | — | DU simulators (MG Road, Indiranagar, Koramangala) |
-| `du-east-1/2/3/4` | — | DU simulators (Whitefield, Marathahalli, KR Puram, Bellandur) |
-| `du-south-1/2/3` | — | DU simulators (Electronic City, Jayanagar/BTM, Banashankari/JP Nagar) |
+| `du-east-1` | — | DU simulator (Whitefield) |
+| `du-east-2` | — | DU simulator (Marathahalli) |
+| `du-east-3` | — | DU simulator (KR Puram) |
+| `du-east-4` | — | DU simulator (Bellandur) |
+| `du-central-1` | — | DU simulator (Indiranagar) |
+| `du-central-2` | — | DU simulator (Koramangala) |
+| `du-south-1` | — | DU simulator (HSR Layout) |
+| `du-south-2` | — | DU simulator (BTM Layout) |
+| `du-south-3` | — | DU simulator (Jayanagar) |
+| `du-south-4` | — | DU simulator (Electronic City) |
 | `controller` | 8080 | Topology control plane |
 | `planning-api` | 8081 | Network planning engine |
 | `kpi-agent` | — | KPI monitoring + BiLSTM anomaly detection |
 | `orchestrator` | 8082 | Gemini LLM chat agent |
 | `map-server` | 8083 | Leaflet.js live cell map |
 
-**Total: 26 containers**
+**Total: 20 containers**
 
 ### InfluxDB Measurements
 
@@ -178,8 +191,8 @@ The KPI agent, controller, or planning engine can reorganise cells at any time i
 ### Phase 1 — Foundation ✅ COMPLETE
 - [x] Define data schema (InfluxDB measurements + topology.json with vendor/hardware metadata)
 - [x] Build Controller Agent (GET/POST endpoints, atomic topology CRUD)
-- [x] 48-cell Bangalore dataset: 18 zones, 4G/5G mixed, Nokia/Ericsson/Samsung/ZTE 25% each, streaming every 10 s
-- [x] Deploy dev environment (26 containers: InfluxDB, Grafana, Core, 4×CU, 14×DU, Controller, Planning, KPI, Orchestrator, Map)
+- [x] 40-cell South-East Bangalore Tech Corridor: 10 areas fully covered (4 cells/area: 5G n78, 5G n28, 4G B3, 4G B40); Nokia/Ericsson/Samsung/ZTE 25% each; active_ues_peak 1.625M (50% × 13M city pop × 25% share); streaming every 10 s
+- [x] Deploy dev environment (20 containers: InfluxDB, Grafana, Core, 2×CU, 10×DU, Controller, Planning, KPI, Orchestrator, Map)
 
 ### Phase 2 — Planning Engine ✅ COMPLETE
 - [x] Cell placement algorithm (density-weighted heuristic, Haversine distance)
@@ -280,5 +293,5 @@ GET  /health
 - Plan apply propagates to all DU/CU containers within 10 s.
 - KPI agent detects and responds to overload within 2 polling cycles (60 s).
 - Orchestrator correctly routes ≥ 90% of operator commands in manual testing.
-- All 48 cells stream data with zero gaps in the demo scenario.
-- Map page loads and renders all 48 cells with live KPIs within 5 s of controller startup.
+- All 40 cells stream data with zero gaps in the demo scenario.
+- Map page loads and renders all 40 cells with live KPIs within 5 s of controller startup.

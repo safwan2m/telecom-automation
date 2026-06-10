@@ -152,47 +152,7 @@ services:
     volumes:
       - ./config:/config
 
-  # ── Centralised Units (4 CUs) ─────────────────────────────────────────────
-
-  cu-north:
-    build:
-      context: ./simulators/cu
-    container_name: cu-north
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      CU_ID: CU-NORTH
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
-
-  cu-central:
-    build:
-      context: ./simulators/cu
-    container_name: cu-central
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      CU_ID: CU-CENTRAL
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
+  # ── Centralised Units (2 CUs) ─────────────────────────────────────────────
 
   cu-east:
     build:
@@ -234,147 +194,7 @@ services:
     volumes:
       - ./config:/config:ro
 
-  # ── Distributed Units (14 DUs) ────────────────────────────────────────────
-
-  du-north-1:
-    build:
-      context: ./simulators/du
-    container_name: du-north-1
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      DU_ID: DU-NORTH-1
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
-
-  du-north-2:
-    build:
-      context: ./simulators/du
-    container_name: du-north-2
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      DU_ID: DU-NORTH-2
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
-
-  du-north-3:
-    build:
-      context: ./simulators/du
-    container_name: du-north-3
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      DU_ID: DU-NORTH-3
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
-
-  du-north-4:
-    build:
-      context: ./simulators/du
-    container_name: du-north-4
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      DU_ID: DU-NORTH-4
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
-
-  du-central-1:
-    build:
-      context: ./simulators/du
-    container_name: du-central-1
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      DU_ID: DU-CENTRAL-1
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
-
-  du-central-2:
-    build:
-      context: ./simulators/du
-    container_name: du-central-2
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      DU_ID: DU-CENTRAL-2
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
-
-  du-central-3:
-    build:
-      context: ./simulators/du
-    container_name: du-central-3
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    environment:
-      DU_ID: DU-CENTRAL-3
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUX_ORG: ${INFLUXDB_ORG}
-      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      INTERVAL_SEC: "10"
-      TOPO_POLL_SEC: "5"
-      TOPOLOGY_FILE: /config/topology.json
-    volumes:
-      - ./config:/config:ro
+  # ── Distributed Units (10 DUs — one per area) ────────────────────────────
 
   du-east-1:
     build:
@@ -456,6 +276,46 @@ services:
     volumes:
       - ./config:/config:ro
 
+  du-central-1:
+    build:
+      context: ./simulators/du
+    container_name: du-central-1
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-CENTRAL-1
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  du-central-2:
+    build:
+      context: ./simulators/du
+    container_name: du-central-2
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-CENTRAL-2
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
   du-south-1:
     build:
       context: ./simulators/du
@@ -506,6 +366,26 @@ services:
         condition: service_healthy
     environment:
       DU_ID: DU-SOUTH-3
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      INTERVAL_SEC: "10"
+      TOPO_POLL_SEC: "5"
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./config:/config:ro
+
+  du-south-4:
+    build:
+      context: ./simulators/du
+    container_name: du-south-4
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      DU_ID: DU-SOUTH-4
       INFLUX_URL: http://influxdb:8086
       INFLUX_TOKEN: ${INFLUXDB_TOKEN}
       INFLUX_ORG: ${INFLUXDB_ORG}
