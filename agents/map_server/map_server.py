@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Network Map Server — live Leaflet.js map of all South-East Bangalore cells.
+Network Map Server — live Leaflet.js map of all Malleswaram cells.
 
 GET /          Leaflet map page (auto-refreshes every 30 s)
 GET /api/cells Cell list + live KPIs + RF coverage radius (JSON)
@@ -62,7 +62,7 @@ MAP_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>South-East Bangalore RAN — Live Cell Map</title>
+<title>Malleswaram 4G/5G NSA — Live Cell Map</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
@@ -107,7 +107,7 @@ MAP_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div id="header">
-  <h1>South-East Bangalore 4G/5G NSA — Live Cell Map</h1>
+  <h1>Malleswaram 4G/5G NSA — Live Cell Map</h1>
   <span class="badge live" id="live-dot">&#9679; LIVE</span>
   <span class="badge" id="cell-count">— cells</span>
   <span class="badge" id="last-update">Fetching…</span>
@@ -134,7 +134,7 @@ MAP_HTML = """<!DOCTYPE html>
 <script>
 const VENDOR_COLOR = { Nokia: '#60a5fa', Ericsson: '#4ade80', Samsung: '#a78bfa', ZTE: '#fb923c' };
 
-const map = L.map('map', { zoomControl: true }).setView([12.940, 77.660], 12);
+const map = L.map('map', { zoomControl: true }).setView([13.000, 77.570], 14);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; OpenStreetMap &copy; CARTO',
   subdomains: 'abcd', maxZoom: 19
@@ -152,8 +152,8 @@ legend.onAdd = () => {
     '<span class="legend-dot" style="background:#888;opacity:0.95"></span>5G NR (solid dot)<br>' +
     '<span class="legend-dot" style="background:#888;opacity:0.55"></span>4G LTE (faded dot)<br>' +
     '<br><b>Coverage circle</b><br>' +
-    '<span class="legend-ring" style="border-color:#888"></span>RF footprint (COST-231 Hata)<br>' +
-    '4G circles are dashed<br>' +
+    '<span class="legend-ring" style="border-color:#888"></span>RF footprint (COST-231-Hata)<br>' +
+    '4G circles dashed · 5G solid<br>' +
     '<br><b>Status fill</b><br>' +
     '<span class="legend-dot" style="background:#f87171"></span>Overloaded (PRB &gt;85%)<br>' +
     '<span class="legend-dot" style="background:#fbbf24"></span>SINR low (&lt;5 dB)';
@@ -327,10 +327,12 @@ def api_cells():
             c.get("generation", "5G"),
             c.get("antenna_config", "64T64R"),
         )
-        # Prefer the live radius from KPI telemetry if available (emitted by DU simulator)
         kpi = c.get("kpi", {})
-        if kpi.get("coverage_radius_m"):
-            radius_m = kpi["coverage_radius_m"]
+        # Prefer live radius from KPI telemetry when it's within 2× of the model estimate
+        # (guards against stale InfluxDB data from a previous topology)
+        live_r = kpi.get("coverage_radius_m")
+        if live_r and 0.5 * radius_m <= live_r <= 2.0 * radius_m:
+            radius_m = live_r
 
         cells.append({
             "id":               cell_id,
