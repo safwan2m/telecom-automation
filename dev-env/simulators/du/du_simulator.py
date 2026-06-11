@@ -100,22 +100,13 @@ def compute_coverage_radius_m(
 
 # ── Population model ──────────────────────────────────────────────────────────
 
-# People per km² for each area — calibrated so the 10-area corridor totals ~100,000 residents
+# People per km² — effective density including 15% commuter overhead (46,000 / ~5 km²)
 AREA_DENSITY: dict[str, float] = {
-    "Whitefield":       600,
-    "Marathahalli":     800,
-    "KR Puram":         533,
-    "Bellandur":        467,
-    "Indiranagar":     1600,
-    "Koramangala":     1429,
-    "HSR Layout":      1125,
-    "BTM Layout":      1500,
-    "Jayanagar":       1500,
-    "Electronic City":  400,
+    "Malleswaram": 9_000,
 }
 
-MARKET_SHARE    = 0.25   # operator market share
-PEAK_CONCURRENT = 0.40   # fraction of operator subscribers active at demand peak
+MARKET_SHARE    = 0.40   # tier-1 operator share in Malleswaram
+PEAK_CONCURRENT = 0.40   # fraction of subscribers active during busy hour
 
 
 def coverage_expected_ues(area: str, radius_m: float, max_ues: int) -> int:
