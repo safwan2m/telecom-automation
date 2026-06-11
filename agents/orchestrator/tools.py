@@ -94,10 +94,14 @@ def plan_network(
     spectrum_bands: list[str] | None = None,
     deployment_budget: float = 2_000_000.0,
     e2e_latency_ms: float = 10.0,
+    use_mip: bool = False,
+    sinr_min_db: float = 10.0,
 ) -> dict:
     """
-    Run the planning engine to generate a new network plan for the given parameters.
-    Returns the plan including cell placement, PCI assignments, DU/CU grouping, and slice allocation.
+    Run the planning engine to generate a new network plan.
+    Returns cell placement, PCI assignments, DU/CU grouping, and slice allocation.
+    use_mip=True selects cells using MIP optimisation (Almoghathawi et al. 2024)
+    instead of the default heuristic.  sinr_min_db sets the SINR quality constraint.
     """
     body = {
         "geographic_area":       geographic_area,
@@ -106,8 +110,31 @@ def plan_network(
         "spectrum_bands":        spectrum_bands or ["n78", "n28"],
         "deployment_budget":     deployment_budget,
         "latency_constraints":   {"e2e_ms": e2e_latency_ms, "fronthaul_us": 100.0},
+        "use_mip":               use_mip,
+        "sinr_min_db":           sinr_min_db,
     }
     return _plan("/plan", "POST", body)
+
+
+def plan_network_multi_period(
+    demand_mode: str = "permanent",
+    spectrum_bands: list[str] | None = None,
+    deployment_budget: float = 2_000_000.0,
+    sinr_min_db: float = 10.0,
+) -> dict:
+    """
+    Run multi-period MIP network planning.
+    demand_mode='permanent': phased rollout (Case A — areas added each period).
+    demand_mode='temporary': diurnal/event demand shift (Case B — demand clusters shift).
+    Returns optimal build schedule across periods plus full network plan.
+    """
+    body = {
+        "demand_mode":      demand_mode,
+        "spectrum_bands":   spectrum_bands or ["n78", "n28"],
+        "deployment_budget": deployment_budget,
+        "sinr_min_db":      sinr_min_db,
+    }
+    return _plan("/plan/multi-period", "POST", body)
 
 
 def apply_plan(plan_id: str) -> dict:
@@ -189,7 +216,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "plan_network",
-        "description": "Run the planning engine to generate a new network plan. Returns cell placement, PCI assignments, DU/CU grouping, slice allocation, cost estimate, and timing sync strategy. The operator must call apply_plan separately to deploy it.",
+        "description": "Run the planning engine to generate a new network plan. Returns cell placement, PCI assignments, DU/CU grouping, slice allocation, cost estimate, and timing sync strategy. The operator must call apply_plan separately to deploy it. Set use_mip=true for MIP-optimal placement with SINR quality constraints.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -201,6 +228,23 @@ TOOL_SCHEMAS = [
                 "spectrum_bands":         {"type": "array", "items": {"type": "string"}, "description": "e.g. ['n78','n28']"},
                 "deployment_budget":      {"type": "number",  "description": "USD", "default": 2000000},
                 "e2e_latency_ms":         {"type": "number",  "description": "E2E latency target ms", "default": 10},
+                "use_mip":                {"type": "boolean", "description": "Use MIP-optimal placement (slower but cost-optimal with SINR constraints)", "default": False},
+                "sinr_min_db":            {"type": "number",  "description": "Minimum SINR constraint for MIP placement (dB)", "default": 10},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "plan_network_multi_period",
+        "description": "Run multi-period MIP network planning. permanent mode (Case A) optimises a phased rollout — BSs built in early periods serve later demand. temporary mode (Case B) optimises for shifting demand (events, diurnal peaks). Returns optimal build schedule across periods plus a deployable network plan.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "demand_mode":       {"type": "string", "enum": ["permanent", "temporary"], "default": "permanent",
+                                      "description": "permanent=phased rollout, temporary=diurnal/event shift"},
+                "spectrum_bands":    {"type": "array", "items": {"type": "string"}, "description": "e.g. ['n78','n28']"},
+                "deployment_budget": {"type": "number", "description": "USD", "default": 2000000},
+                "sinr_min_db":       {"type": "number", "description": "Minimum SINR constraint (dB)", "default": 10},
             },
             "required": [],
         },
@@ -230,12 +274,13 @@ TOOL_SCHEMAS = [
 
 # Map tool name → function
 TOOL_MAP = {
-    "query_network": lambda args: query_network(),
-    "list_cells":    lambda args: list_cells(**args),
-    "query_cell":    lambda args: query_cell(**args),
-    "move_cell":     lambda args: move_cell(**args),
-    "move_du":       lambda args: move_du(**args),
-    "plan_network":  lambda args: plan_network(**args),
-    "apply_plan":    lambda args: apply_plan(**args),
-    "get_alerts":    lambda args: get_alerts(**args),
+    "query_network":             lambda args: query_network(),
+    "list_cells":                lambda args: list_cells(**args),
+    "query_cell":                lambda args: query_cell(**args),
+    "move_cell":                 lambda args: move_cell(**args),
+    "move_du":                   lambda args: move_du(**args),
+    "plan_network":              lambda args: plan_network(**args),
+    "plan_network_multi_period": lambda args: plan_network_multi_period(**args),
+    "apply_plan":                lambda args: apply_plan(**args),
+    "get_alerts":                lambda args: get_alerts(**args),
 }
