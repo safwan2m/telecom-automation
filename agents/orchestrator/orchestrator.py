@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Telecom Network Orchestrator — LLM chat agent with Google Gemini tool-calling.
+Telecom Network Orchestrator — LLM chat agent.
+
+Supports two LLM backends, selected by the LLM_BACKEND env var:
+  gemini    (default) — Google Gemini via google-genai SDK, requires GOOGLE_API_KEY
+  claude-cli          — Anthropic Claude via the local `claude` CLI, requires
+                        CLAUDE_CLI_PATH and claude login (no API key needed)
 
 POST /chat    {"message": "...", "session_id": "default"} → streaming text
 GET  /history {"session_id": "default"}
@@ -17,17 +22,28 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from google import genai
-from google.genai import types
 
 import tools as T
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# ── Config ────────────────────────────────────────────────────────────────────
-GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
-MODEL_NAME     = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+# ── Backend selection ─────────────────────────────────────────────────────────
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "gemini").lower()
+
+if LLM_BACKEND == "claude-cli":
+    from custom_anthropic_client import CustomAnthropicClient
+    claude_client = CustomAnthropicClient()
+    MODEL_NAME    = claude_client.model
+    log.info("LLM backend: claude-cli (model=%s, cli=%s)",
+             MODEL_NAME, os.environ.get("CLAUDE_CLI_PATH"))
+else:
+    from google import genai
+    from google.genai import types
+    GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
+    MODEL_NAME     = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    gemini         = genai.Client(api_key=GOOGLE_API_KEY)
+    log.info("LLM backend: gemini (model=%s)", MODEL_NAME)
 
 T.CONTROLLER_URL = os.environ.get("CONTROLLER_URL", "http://controller:8080")
 T.PLANNING_URL   = os.environ.get("PLANNING_URL",   "http://planning-api:8081")
@@ -36,13 +52,13 @@ T.INFLUX_TOKEN   = os.environ.get("INFLUX_TOKEN",   "telecom-super-secret-auth-t
 T.INFLUX_ORG     = os.environ.get("INFLUX_ORG",     "telecom")
 T.INFLUX_BUCKET  = os.environ.get("INFLUX_BUCKET",  "telecom_metrics")
 
-gemini = genai.Client(api_key=GOOGLE_API_KEY)
-
 app = FastAPI(title="Telecom Orchestrator", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# session_id -> list of types.Content objects (full conversation history)
+# Gemini sessions: session_id -> list[types.Content]
 _sessions: dict[str, list] = {}
+# Claude CLI sessions: session_id -> list[{"role": ..., "content": ...}]
+_claude_sessions: dict[str, list] = {}
 
 SYSTEM_PROMPT = """You are an expert RAN operations assistant for a Bangalore 4G/5G NSA deployment.
 You have access to tools to query live network state, move RAN components, run the planning engine, and retrieve alerts.
@@ -200,6 +216,52 @@ def chat_turn(session_id: str, user_message: str):
             yield f"\n\n[Error] {err}\n"
 
 
+def chat_turn_claude(session_id: str, user_message: str):
+    """Claude CLI backend: run one full turn (including tool loops) and yield text chunks."""
+    history = _claude_sessions.setdefault(session_id, [])
+    history.append({"role": "user", "content": user_message})
+    system = SYSTEM_PROMPT + build_network_context()
+
+    try:
+        while True:
+            response = claude_client.messages.create(
+                system=system,
+                tools=T.TOOL_SCHEMAS,
+                messages=history,
+            )
+
+            text_parts = [b.text for b in response.content if b.type == "text"]
+            tool_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if text_parts:
+                yield " ".join(text_parts)
+
+            # Persist assistant turn (contains ToolUseBlock / TextBlock objects that
+            # custom_anthropic_client can serialise back on the next call)
+            history.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason != "tool_use" or not tool_blocks:
+                break
+
+            tool_results = []
+            for tb in tool_blocks:
+                yield f"\n\n*[calling tool: {tb.name}...]*\n"
+                result = execute_tool(tb.name, tb.input)
+                log.info("Tool %s → %s", tb.name, str(result)[:120])
+                tool_results.append({
+                    "type":        "tool_result",
+                    "tool_use_id": tb.id,
+                    "content":     json.dumps(result, default=str),
+                })
+
+            history.append({"role": "user", "content": tool_results})
+            yield "\n"
+
+    except Exception as e:
+        log.error("Claude CLI error: %s", e)
+        yield f"\n\n[Error] {e}\n"
+
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -209,7 +271,7 @@ class ChatRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_NAME}
+    return {"status": "ok", "model": MODEL_NAME, "backend": LLM_BACKEND}
 
 
 @app.get("/tools")
@@ -219,36 +281,63 @@ def list_tools():
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    return StreamingResponse(
-        chat_turn(req.session_id, req.message),
-        media_type="text/plain",
+    generator = (
+        chat_turn_claude(req.session_id, req.message)
+        if LLM_BACKEND == "claude-cli"
+        else chat_turn(req.session_id, req.message)
     )
+    return StreamingResponse(generator, media_type="text/plain")
 
 
 @app.get("/history")
 def get_history(session_id: str = "default"):
-    history = _sessions.get(session_id, [])
-    normalized = []
-    for content in history:
-        role  = getattr(content, "role", "?")
-        texts = []
-        for part in getattr(content, "parts", []) or []:
-            if getattr(part, "text", None):
-                texts.append(part.text)
-            elif getattr(part, "function_call", None) and part.function_call.name:
-                texts.append(f"[Calling {part.function_call.name}]")
-            elif getattr(part, "function_response", None) and part.function_response.name:
-                texts.append(f"[Tool result: {part.function_response.name}]")
-        normalized.append({
-            "role":    "assistant" if role == "model" else role,
-            "content": " ".join(texts),
-        })
-    return normalized
+    if LLM_BACKEND == "claude-cli":
+        history = _claude_sessions.get(session_id, [])
+        normalized = []
+        for msg in history:
+            role    = msg.get("role", "?")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                normalized.append({"role": role, "content": content})
+            elif isinstance(content, list):
+                texts = []
+                for item in content:
+                    if hasattr(item, "text"):          # TextBlock
+                        texts.append(item.text)
+                    elif hasattr(item, "name"):        # ToolUseBlock
+                        texts.append(f"[Calling {item.name}]")
+                    elif isinstance(item, dict):
+                        t = item.get("type", "")
+                        if t == "tool_result":
+                            texts.append(f"[Tool result: {str(item.get('content',''))[:80]}]")
+                        elif t == "text":
+                            texts.append(item.get("text", ""))
+                normalized.append({"role": role, "content": " ".join(texts)})
+        return normalized
+    else:
+        history = _sessions.get(session_id, [])
+        normalized = []
+        for content in history:
+            role  = getattr(content, "role", "?")
+            texts = []
+            for part in getattr(content, "parts", []) or []:
+                if getattr(part, "text", None):
+                    texts.append(part.text)
+                elif getattr(part, "function_call", None) and part.function_call.name:
+                    texts.append(f"[Calling {part.function_call.name}]")
+                elif getattr(part, "function_response", None) and part.function_response.name:
+                    texts.append(f"[Tool result: {part.function_response.name}]")
+            normalized.append({
+                "role":    "assistant" if role == "model" else role,
+                "content": " ".join(texts),
+            })
+        return normalized
 
 
 @app.delete("/history")
 def clear_history(session_id: str = "default"):
     _sessions.pop(session_id, None)
+    _claude_sessions.pop(session_id, None)
     return {"status": "cleared", "session_id": session_id}
 
 

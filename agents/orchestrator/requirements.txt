@@ -4,3 +4,4 @@ google-genai>=1.0.0
 httpx==0.27.2
 influxdb-client==1.44.0
 pydantic==2.10.3
+python-dotenv>=1.0.0

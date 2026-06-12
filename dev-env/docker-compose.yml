@@ -96,6 +96,21 @@ services:
       POWER_WASTE_MIN_UES: "15"
 
   # ── Orchestrator Agent ────────────────────────────────────────────────────
+  #
+  # LLM backend selection (set in dev-env/.env):
+  #
+  #   LLM_BACKEND=gemini        (default) — uses GOOGLE_API_KEY + Gemini API
+  #   LLM_BACKEND=claude-cli    — uses the `claude` CLI; no API key needed
+  #
+  # For claude-cli, set CLAUDE_CONFIG_PATH in .env to your host's .claude
+  # directory so credentials are shared (no re-login needed):
+  #
+  #   Windows:  CLAUDE_CONFIG_PATH=C:/Users/<you>/.claude
+  #   Linux/Mac: CLAUDE_CONFIG_PATH=/home/<you>/.claude
+  #
+  # If CLAUDE_CONFIG_PATH is not set, a named volume (claude_auth) is used
+  # instead — authenticate once with:
+  #   docker compose run --rm orchestrator claude login
 
   orchestrator:
     build:
@@ -108,14 +123,24 @@ services:
       influxdb:
         condition: service_healthy
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      # ── Gemini backend ─────────────────────────────────────
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GEMINI_MODEL: gemini-2.5-flash
+      # ── Claude CLI backend ─────────────────────────────────
+      LLM_BACKEND: ${LLM_BACKEND:-gemini}
+      CLAUDE_CLI_PATH: /usr/local/bin/claude
+      ANTHROPIC_MODEL_NAME: ${ANTHROPIC_MODEL_NAME:-sonnet}
+      # ── Shared ─────────────────────────────────────────────
       CONTROLLER_URL: http://controller:8080
       PLANNING_URL: http://planning-api:8081
       INFLUX_URL: http://influxdb:8086
       INFLUX_TOKEN: ${INFLUXDB_TOKEN}
       INFLUX_ORG: ${INFLUXDB_ORG}
       INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+    volumes:
+      # Mount host Claude credentials (bind mount if CLAUDE_CONFIG_PATH is set,
+      # named volume otherwise — both land at /root/.claude inside the container)
+      - ${CLAUDE_CONFIG_PATH:-claude_auth}:/root/.claude
 
   # ── Network Map Server ────────────────────────────────────────────────────
 
@@ -240,3 +265,4 @@ volumes:
   influxdb_data:
   influxdb_config:
   grafana_data:
+  claude_auth:    # persistent Claude CLI auth for the orchestrator (claude-cli backend)
