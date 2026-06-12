@@ -68,24 +68,31 @@ MAP_HTML = """<!DOCTYPE html>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f1117; color: #e0e0e0;
-         height: 100vh; display: flex; flex-direction: column; }
+         height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
   #header { background: #1a1d27; border-bottom: 1px solid #2d3142;
-            padding: 10px 18px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+            padding: 10px 18px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+            flex-shrink: 0; }
   #header h1 { font-size: 1.1rem; font-weight: 600; color: #fff; letter-spacing: .5px; }
   .badge { font-size: 0.75rem; background: #2d3142; border-radius: 12px;
            padding: 3px 10px; color: #a0a8c0; }
   .badge.live { background: #1a3a2a; color: #4ade80; }
   #controls { background: #1a1d27; border-bottom: 1px solid #2d3142;
               padding: 8px 18px; display: flex; gap: 12px; flex-wrap: wrap;
-              align-items: center; font-size: 0.8rem; }
+              align-items: center; font-size: 0.8rem; flex-shrink: 0; }
   #controls label { cursor: pointer; display: flex; align-items: center; gap: 5px; }
   #controls input[type=checkbox] { accent-color: #60a5fa; }
+  #chat-toggle-btn { background: #1e3a5f; border: none; color: #60a5fa;
+                     padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+  #chat-toggle-btn:hover { background: #2563eb; color: #fff; }
+  #chat-toggle-btn.closed { background: #2d3142; color: #a0a8c0; }
   #refresh-btn { margin-left: auto; background: #2563eb; border: none; color: #fff;
                  padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
   #refresh-btn:hover { background: #1d4ed8; }
-  #map { flex: 1; }
+  #main { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+  #map { flex: 1; min-width: 0; }
   #statusbar { background: #1a1d27; border-top: 1px solid #2d3142;
-               padding: 5px 18px; font-size: 0.72rem; color: #6b7280; display: flex; gap: 20px; }
+               padding: 5px 18px; font-size: 0.72rem; color: #6b7280; display: flex;
+               gap: 20px; flex-shrink: 0; }
   .legend { background: #1a1d27; border: 1px solid #2d3142; border-radius: 8px;
             padding: 10px 14px; font-size: 0.75rem; line-height: 1.8; min-width: 185px; }
   .legend b { color: #fff; }
@@ -103,6 +110,74 @@ MAP_HTML = """<!DOCTYPE html>
   .popup-label { color: #9ca3af; }
   .popup-val { color: #e0e0e0; font-weight: 500; }
   .overload { color: #f87171 !important; font-weight: 700; }
+
+  /* ── chat panel ──────────────────────────────────────────────────────────── */
+  #chat-panel { width: 360px; flex-shrink: 0; background: #13151f;
+                border-left: 1px solid #2d3142; display: flex; flex-direction: column;
+                overflow: hidden; transition: width 0.18s ease; }
+  #chat-panel.closed { width: 0; border-left: none; }
+  #chat-header { padding: 9px 13px; border-bottom: 1px solid #2d3142; display: flex;
+                 align-items: center; gap: 8px; flex-shrink: 0; white-space: nowrap;
+                 overflow: hidden; }
+  #chat-header-title { flex: 1; font-size: 0.83rem; font-weight: 600; color: #fff; }
+  #orch-badge { font-size: 0.68rem; background: #1e3a5f; color: #60a5fa;
+                padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+  #orch-badge.offline { background: #3a1e1e; color: #f87171; }
+  #chat-clear-btn { background: none; border: 1px solid #3d4158; color: #6b7280;
+                    padding: 2px 9px; border-radius: 6px; cursor: pointer; font-size: 0.70rem; }
+  #chat-clear-btn:hover { border-color: #f87171; color: #f87171; }
+  #chat-messages { flex: 1; overflow-y: auto; padding: 10px; display: flex;
+                   flex-direction: column; gap: 8px; min-height: 0; }
+  #chat-messages::-webkit-scrollbar { width: 4px; }
+  #chat-messages::-webkit-scrollbar-track { background: #13151f; }
+  #chat-messages::-webkit-scrollbar-thumb { background: #3d4158; border-radius: 2px; }
+  .msg-user { background: #1e3a5f; color: #e0e0e0; border-radius: 10px 10px 2px 10px;
+              padding: 7px 11px; align-self: flex-end; max-width: 92%;
+              font-size: 0.80rem; line-height: 1.4; word-break: break-word; }
+  .msg-agent { background: #1e2030; color: #d0d4e4; border-radius: 10px 10px 10px 2px;
+               padding: 8px 12px; align-self: flex-start; max-width: 98%;
+               font-size: 0.79rem; line-height: 1.52; word-break: break-word; }
+  .msg-agent p { margin: 3px 0; }
+  .msg-agent ul, .msg-agent ol { padding-left: 16px; margin: 4px 0; }
+  .msg-agent li { margin: 2px 0; }
+  .msg-agent table { border-collapse: collapse; width: 100%; font-size: 0.74rem; margin: 6px 0; }
+  .msg-agent th, .msg-agent td { border: 1px solid #3d4158; padding: 3px 6px; text-align: left; }
+  .msg-agent th { background: #252836; color: #a0a8c0; }
+  .msg-agent code { background: #252836; padding: 1px 4px; border-radius: 3px;
+                    font-size: 0.74rem; font-family: 'Consolas', monospace; }
+  .msg-agent pre { background: #252836; padding: 8px; border-radius: 6px;
+                   overflow-x: auto; margin: 6px 0; font-size: 0.74rem; }
+  .msg-agent pre code { background: none; padding: 0; }
+  .msg-agent h1, .msg-agent h2, .msg-agent h3 { color: #fff; margin: 6px 0 3px; font-size: 0.87rem; }
+  .msg-agent strong { color: #e0e0e0; }
+  .msg-agent blockquote { border-left: 3px solid #3d4158; margin: 4px 0; padding-left: 8px;
+                           color: #9ca3af; }
+  .msg-tool { align-self: center; font-size: 0.69rem; color: #60a5fa; font-style: italic;
+              background: #0e1f3a; border-radius: 8px; padding: 3px 10px; max-width: 94%;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg-error { background: #3a1e1e; color: #f87171; border-radius: 8px; padding: 7px 11px;
+               align-self: stretch; font-size: 0.78rem; }
+  .typing-cursor { display: inline-block; width: 2px; height: 0.9em; background: #60a5fa;
+                   vertical-align: text-bottom; animation: blink 0.7s step-end infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+  #chat-shortcuts { padding: 5px 10px; display: flex; gap: 5px; flex-wrap: wrap;
+                    border-top: 1px solid #2d3142; flex-shrink: 0; }
+  .sc-btn { background: #1a1d27; border: 1px solid #2d3142; color: #7a85a0;
+            padding: 3px 9px; border-radius: 10px; cursor: pointer; font-size: 0.70rem;
+            white-space: nowrap; }
+  .sc-btn:hover { background: #252836; color: #fff; border-color: #3d4158; }
+  #chat-input-row { padding: 8px 10px; border-top: 1px solid #2d3142; display: flex;
+                    gap: 7px; flex-shrink: 0; }
+  #chat-input { flex: 1; background: #1e2030; border: 1px solid #3d4158; border-radius: 8px;
+                color: #e0e0e0; padding: 7px 10px; font-size: 0.79rem; resize: none;
+                font-family: inherit; min-height: 36px; max-height: 100px; line-height: 1.4; }
+  #chat-input::placeholder { color: #4a5168; }
+  #chat-input:focus { outline: none; border-color: #2563eb; }
+  #chat-send { background: #2563eb; border: none; color: #fff; border-radius: 8px;
+               padding: 0 13px; cursor: pointer; font-size: 1rem; align-self: flex-end;
+               height: 36px; flex-shrink: 0; }
+  #chat-send:hover { background: #1d4ed8; }
+  #chat-send:disabled { background: #2d3142; color: #4a5168; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -120,9 +195,32 @@ MAP_HTML = """<!DOCTYPE html>
   <label><input type="checkbox" id="showSamsung" checked> <span style="color:#a78bfa">&#9679;</span> Samsung</label>
   <label><input type="checkbox" id="showZTE" checked> <span style="color:#fb923c">&#9679;</span> ZTE</label>
   <label><input type="checkbox" id="showCoverage" checked> Coverage circles</label>
+  <button id="chat-toggle-btn" onclick="toggleChat()">&#128172; Chat</button>
   <button id="refresh-btn" onclick="fetchCells()">&#8635; Refresh</button>
 </div>
-<div id="map"></div>
+<div id="main">
+  <div id="map"></div>
+  <div id="chat-panel">
+    <div id="chat-header">
+      <span id="chat-header-title">&#128302; Network AI</span>
+      <span id="orch-badge">connecting&#8230;</span>
+      <button id="chat-clear-btn" onclick="clearChat()">Clear</button>
+    </div>
+    <div id="chat-messages">
+      <div class="msg-agent">Hi! I&#8217;m your network AI assistant. Ask me anything about the Malleswaram 4G/5G deployment &#8212; cell KPIs, anomalies, topology changes, or deployment planning.</div>
+    </div>
+    <div id="chat-shortcuts">
+      <button class="sc-btn" onclick="runShortcut('/status')">/status</button>
+      <button class="sc-btn" onclick="runShortcut('/alerts')">/alerts</button>
+      <button class="sc-btn" onclick="runShortcut('/cells')">/cells</button>
+      <button class="sc-btn" onclick="runShortcut('/plan')">/plan</button>
+    </div>
+    <div id="chat-input-row">
+      <textarea id="chat-input" rows="1" placeholder="Ask the network AI&#8230; (Enter to send, Shift+Enter for newline)"></textarea>
+      <button id="chat-send" onclick="sendFromInput()">&#10148;</button>
+    </div>
+  </div>
+</div>
 <div id="statusbar">
   <span id="stat-total"></span>
   <span id="stat-5g"></span>
@@ -131,10 +229,17 @@ MAP_HTML = """<!DOCTYPE html>
   <span id="stat-ues"></span>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
 <script>
+// ── Map setup ─────────────────────────────────────────────────────────────────
 const VENDOR_COLOR = { Nokia: '#60a5fa', Ericsson: '#4ade80', Samsung: '#a78bfa', ZTE: '#fb923c' };
 
-const map = L.map('map', { zoomControl: true }).setView([13.000, 77.570], 14);
+const map = L.map('map', {
+  zoomControl: true,
+  zoomSnap: 0.25,
+  zoomDelta: 0.25,
+  wheelPxPerZoomLevel: 100,
+}).setView([13.000, 77.570], 14);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; OpenStreetMap &copy; CARTO',
   subdomains: 'abcd', maxZoom: 19
@@ -298,6 +403,163 @@ async function fetchCells() {
 
 fetchCells();
 setInterval(fetchCells, 30000);
+
+// ── Chat panel ────────────────────────────────────────────────────────────────
+// Derive orchestrator URL from current hostname so this works on any host
+const ORCH_URL = window.location.protocol + '//' + window.location.hostname + ':8082';
+
+const SHORTCUTS = {
+  '/status': 'What is the current status of all cells, DUs, and CUs? Summarise in a table.',
+  '/alerts': 'Show me all recent KPI alerts from the last 60 minutes.',
+  '/cells':  'List all cells with their current connected UEs, PRB utilisation, and DU assignment.',
+  '/plan':   'Generate a network plan for Malleswaram using default parameters and show me a summary.',
+};
+
+// Unique session per page load so chat history is isolated
+const sessionId = 'map-' + Math.random().toString(36).slice(2, 9);
+let chatStreaming = false;
+
+function scrollChat() {
+  const el = document.getElementById('chat-messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendMsg(cls, html, asText) {
+  const el  = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = cls;
+  if (asText) { div.textContent = html; } else { div.innerHTML = html; }
+  el.appendChild(div);
+  scrollChat();
+  return div;
+}
+
+// Split tool-call marker lines from normal text
+function parseChunks(text) {
+  const toolLines = [], mainLines = [];
+  for (const line of text.split('\\n')) {
+    if (/^\\*\\[calling tool:/.test(line.trim())) {
+      toolLines.push(line.trim().replace(/^\\*|\\*$/g, ''));
+    } else {
+      mainLines.push(line);
+    }
+  }
+  return { toolLines, mainText: mainLines.join('\\n') };
+}
+
+function renderAgentDiv(div, rawText) {
+  const { toolLines, mainText } = parseChunks(rawText);
+  let html = toolLines.map(t => `<div class="msg-tool">&#128295; ${t}</div>`).join('');
+  const md = mainText.trim();
+  if (md) {
+    html += window.marked ? marked.parse(md) : md.replace(/\\n/g, '<br>');
+  }
+  div.innerHTML = html;
+}
+
+async function sendMessage(text) {
+  const input   = document.getElementById('chat-input');
+  const sendBtn = document.getElementById('chat-send');
+  if (chatStreaming || !text.trim()) return;
+
+  const displayText = text.trim();
+  const apiMessage  = SHORTCUTS[displayText] || displayText;
+
+  appendMsg('msg-user', displayText, true);
+  input.value = '';
+  input.style.height = 'auto';
+  chatStreaming = true;
+  sendBtn.disabled = true;
+
+  const agentDiv = appendMsg('msg-agent', '<span class="typing-cursor"></span>');
+  let accumulated = '';
+
+  try {
+    const resp = await fetch(ORCH_URL + '/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ message: apiMessage, session_id: sessionId }),
+    });
+
+    if (!resp.ok) {
+      agentDiv.className   = 'msg-error';
+      agentDiv.textContent = 'Orchestrator error ' + resp.status + ': ' + resp.statusText;
+      return;
+    }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      accumulated += decoder.decode(value, { stream: true });
+      renderAgentDiv(agentDiv, accumulated + '\\u258b'); // live cursor char
+      scrollChat();
+    }
+    renderAgentDiv(agentDiv, accumulated); // final — no cursor
+
+  } catch (e) {
+    agentDiv.className = 'msg-error';
+    agentDiv.innerHTML = 'Cannot reach orchestrator at <code>' + ORCH_URL +
+                         '</code> — is it running on port 8082?';
+  } finally {
+    chatStreaming    = false;
+    sendBtn.disabled = false;
+    input.focus();
+    scrollChat();
+  }
+}
+
+function sendFromInput() {
+  sendMessage(document.getElementById('chat-input').value);
+}
+
+function runShortcut(key) {
+  document.getElementById('chat-input').value = key;
+  sendMessage(key);
+}
+
+async function clearChat() {
+  try {
+    await fetch(ORCH_URL + '/history?session_id=' + sessionId, { method: 'DELETE' });
+  } catch (_) {}
+  document.getElementById('chat-messages').innerHTML =
+    '<div class="msg-agent">History cleared.</div>';
+}
+
+function toggleChat() {
+  const panel = document.getElementById('chat-panel');
+  const btn   = document.getElementById('chat-toggle-btn');
+  panel.classList.toggle('closed');
+  const closed = panel.classList.contains('closed');
+  btn.classList.toggle('closed', closed);
+  btn.innerHTML = closed ? '&#128172; Chat' : '&#10005; Chat';
+  setTimeout(() => map.invalidateSize(), 200);
+}
+
+// Auto-resize textarea; Enter sends, Shift+Enter inserts newline
+const chatInput = document.getElementById('chat-input');
+chatInput.addEventListener('input', function () {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+});
+chatInput.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromInput(); }
+});
+
+// Probe orchestrator health on page load
+(async function probeOrch() {
+  const badge = document.getElementById('orch-badge');
+  try {
+    const r = await fetch(ORCH_URL + '/health', { signal: AbortSignal.timeout(4000) });
+    const j = await r.json();
+    badge.textContent = (j.model || 'gemini') + ' ●';
+    badge.classList.remove('offline');
+  } catch (_) {
+    badge.textContent = 'offline ●';
+    badge.classList.add('offline');
+  }
+})();
 </script>
 </body>
 </html>"""
