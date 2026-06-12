@@ -107,9 +107,21 @@ services:
     depends_on:
       influxdb:
         condition: service_healthy
+    # Mount host ~/.claude so the container's `claude -p` CLI shares your login.
+    # On Windows: USERPROFILE=C:\Users\<you>  → mounts C:\Users\<you>\.claude
+    # On Mac/Linux: HOME=/home/<you>          → set CLAUDE_HOME in .env instead
+    volumes:
+      - "${USERPROFILE}/.claude:/root/.claude"
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      # ── Gemini backend (used when CLAUDE_CLI_PATH is empty) ──
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GEMINI_MODEL: gemini-2.5-flash
+      # ── Claude CLI backend (active when CLAUDE_CLI_PATH is non-empty) ──
+      # Always points to the npm-installed binary inside the container.
+      # Host CLAUDE_CLI_PATH (Windows path) is intentionally NOT forwarded here.
+      CLAUDE_CLI_PATH: /usr/local/bin/claude
+      ANTHROPIC_MODEL_NAME: ${ANTHROPIC_MODEL_NAME:-sonnet}
+      # ── Shared ──
       CONTROLLER_URL: http://controller:8080
       PLANNING_URL: http://planning-api:8081
       INFLUX_URL: http://influxdb:8086
@@ -128,8 +140,10 @@ services:
       - "8083:8083"
     depends_on:
       - controller
+      - orchestrator
     environment:
       CONTROLLER_URL: http://controller:8080
+      ORCHESTRATOR_URL: http://orchestrator:8082
 
   # ── Controller (single control plane) ────────────────────────────────────
 
