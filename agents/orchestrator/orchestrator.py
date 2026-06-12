@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-Telecom Network Orchestrator — LLM chat agent with Google Gemini tool-calling.
+Telecom Network Orchestrator — dual-backend LLM chat agent.
+
+Backend A (default): Google Gemini tool-calling via google-genai SDK.
+Backend B:           Claude CLI via CustomAnthropicClient (claude -p).
+                     Activated by setting CLAUDE_CLI_PATH in the environment.
 
 POST /chat    {"message": "...", "session_id": "default"} → streaming text
 GET  /history {"session_id": "default"}
 DELETE /history
 GET  /tools
+GET  /health
 """
 
 import os
@@ -26,8 +31,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
-MODEL_NAME     = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 
 T.CONTROLLER_URL = os.environ.get("CONTROLLER_URL", "http://controller:8080")
 T.PLANNING_URL   = os.environ.get("PLANNING_URL",   "http://planning-api:8081")
@@ -36,13 +39,31 @@ T.INFLUX_TOKEN   = os.environ.get("INFLUX_TOKEN",   "telecom-super-secret-auth-t
 T.INFLUX_ORG     = os.environ.get("INFLUX_ORG",     "telecom")
 T.INFLUX_BUCKET  = os.environ.get("INFLUX_BUCKET",  "telecom_metrics")
 
-gemini = genai.Client(api_key=GOOGLE_API_KEY)
+# ── Backend selection ─────────────────────────────────────────────────────────
+
+CLAUDE_CLI_PATH = os.environ.get("CLAUDE_CLI_PATH", "").strip()
+
+if CLAUDE_CLI_PATH:
+    from custom_anthropic_client import CustomAnthropicClient
+    claude_client = CustomAnthropicClient()
+    MODEL_NAME    = f"claude/{os.environ.get('ANTHROPIC_MODEL_NAME', 'sonnet')}"
+    USE_CLAUDE    = True
+    gemini        = None
+    log.info("Backend: Claude CLI at %s  model=%s", CLAUDE_CLI_PATH, MODEL_NAME)
+else:
+    GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
+    MODEL_NAME     = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    gemini         = genai.Client(api_key=GOOGLE_API_KEY)
+    USE_CLAUDE     = False
+    claude_client  = None
+    log.info("Backend: Gemini  model=%s", MODEL_NAME)
 
 app = FastAPI(title="Telecom Orchestrator", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# session_id -> list of types.Content objects (full conversation history)
-_sessions: dict[str, list] = {}
+# Session history — format depends on backend
+_gemini_sessions: dict[str, list] = {}   # types.Content objects
+_claude_sessions: dict[str, list] = {}   # {"role", "content"} dicts
 
 SYSTEM_PROMPT = """You are an expert RAN operations assistant for a Bangalore 4G/5G NSA deployment.
 You have access to tools to query live network state, move RAN components, run the planning engine, and retrieve alerts.
@@ -75,7 +96,7 @@ Guidelines:
 """
 
 
-# ── Tool schemas (Anthropic → Gemini format) ──────────────────────────────────
+# ── Gemini tool schemas ───────────────────────────────────────────────────────
 
 def _clean_params(params: dict) -> dict:
     """Strip fields the Gemini API rejects."""
@@ -120,7 +141,7 @@ def build_network_context() -> str:
         return "\n\n(Network snapshot unavailable — controller may be starting up.)"
 
 
-# ── Tool execution ────────────────────────────────────────────────────────────
+# ── Tool execution (shared by both backends) ──────────────────────────────────
 
 def execute_tool(name: str, args: dict) -> dict:
     fn = T.TOOL_MAP.get(name)
@@ -130,17 +151,16 @@ def execute_tool(name: str, args: dict) -> dict:
         result = fn(args)
         if not isinstance(result, dict):
             result = {"result": result}
-        # Sanitise — proto Struct cannot hold non-serialisable values
         return json.loads(json.dumps(result, default=str))
     except Exception as e:
         return {"error": str(e)}
 
 
-# ── Chat logic ────────────────────────────────────────────────────────────────
+# ── Gemini chat turn ──────────────────────────────────────────────────────────
 
-def chat_turn(session_id: str, user_message: str):
-    """Run one full turn (including tool loops) and yield text chunks."""
-    history = _sessions.setdefault(session_id, [])
+def chat_turn_gemini(session_id: str, user_message: str):
+    """Run one full Gemini turn (including tool loops) and yield text chunks."""
+    history = _gemini_sessions.setdefault(session_id, [])
     history.append(types.Content(
         role="user",
         parts=[types.Part(text=user_message)],
@@ -173,7 +193,6 @@ def chat_turn(session_id: str, user_message: str):
             if not tool_calls:
                 break
 
-            # Execute every requested tool
             fn_parts = []
             for tc in tool_calls:
                 yield f"\n\n*[calling tool: {tc.name}...]*\n"
@@ -200,6 +219,54 @@ def chat_turn(session_id: str, user_message: str):
             yield f"\n\n[Error] {err}\n"
 
 
+# ── Claude CLI chat turn ──────────────────────────────────────────────────────
+
+def chat_turn_claude(session_id: str, user_message: str):
+    """Run one full Claude CLI turn (including tool loops) and yield text chunks."""
+    history = _claude_sessions.setdefault(session_id, [])
+    history.append({"role": "user", "content": user_message})
+
+    system = SYSTEM_PROMPT + build_network_context()
+
+    try:
+        while True:
+            response = claude_client.messages.create(
+                system=system,
+                tools=T.TOOL_SCHEMAS,   # already in {name, description, input_schema} format
+                messages=history,
+            )
+
+            text_parts  = [b.text  for b in response.content if b.type == "text"]
+            tool_blocks = [b       for b in response.content if b.type == "tool_use"]
+
+            if text_parts:
+                yield "".join(text_parts)
+
+            if response.stop_reason == "end_turn" or not tool_blocks:
+                history.append({"role": "assistant", "content": response.content})
+                break
+
+            history.append({"role": "assistant", "content": response.content})
+
+            tool_results = []
+            for tb in tool_blocks:
+                yield f"\n\n*[calling tool: {tb.name}...]*\n"
+                result = execute_tool(tb.name, tb.input)
+                log.info("Tool %s → %s", tb.name, str(result)[:120])
+                tool_results.append({
+                    "type":        "tool_result",
+                    "tool_use_id": tb.id,
+                    "content":     json.dumps(result, default=str),
+                })
+
+            history.append({"role": "user", "content": tool_results})
+            yield "\n"
+
+    except Exception as e:
+        log.error("Claude CLI error: %s", e)
+        yield f"\n\n[Error] {e}\n"
+
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -209,7 +276,8 @@ class ChatRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_NAME}
+    backend = "claude-cli" if USE_CLAUDE else "gemini"
+    return {"status": "ok", "model": MODEL_NAME, "backend": backend}
 
 
 @app.get("/tools")
@@ -219,36 +287,62 @@ def list_tools():
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    return StreamingResponse(
-        chat_turn(req.session_id, req.message),
-        media_type="text/plain",
-    )
+    gen = (chat_turn_claude(req.session_id, req.message)
+           if USE_CLAUDE
+           else chat_turn_gemini(req.session_id, req.message))
+    return StreamingResponse(gen, media_type="text/plain")
 
 
 @app.get("/history")
 def get_history(session_id: str = "default"):
-    history = _sessions.get(session_id, [])
-    normalized = []
-    for content in history:
-        role  = getattr(content, "role", "?")
-        texts = []
-        for part in getattr(content, "parts", []) or []:
-            if getattr(part, "text", None):
-                texts.append(part.text)
-            elif getattr(part, "function_call", None) and part.function_call.name:
-                texts.append(f"[Calling {part.function_call.name}]")
-            elif getattr(part, "function_response", None) and part.function_response.name:
-                texts.append(f"[Tool result: {part.function_response.name}]")
-        normalized.append({
-            "role":    "assistant" if role == "model" else role,
-            "content": " ".join(texts),
-        })
-    return normalized
+    if USE_CLAUDE:
+        history = _claude_sessions.get(session_id, [])
+        normalized = []
+        for msg in history:
+            role    = msg.get("role", "?")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                normalized.append({"role": role, "content": content})
+            elif isinstance(content, list):
+                texts = []
+                for item in content:
+                    if hasattr(item, "text"):              # TextBlock
+                        texts.append(item.text)
+                    elif hasattr(item, "name"):             # ToolUseBlock
+                        texts.append(f"[Calling {item.name}]")
+                    elif isinstance(item, dict):
+                        if item.get("type") == "tool_result":
+                            texts.append(f"[Tool result: {item.get('tool_use_id', '')}]")
+                        elif item.get("type") == "text":
+                            texts.append(item.get("text", ""))
+                normalized.append({"role": role, "content": " ".join(texts)})
+        return normalized
+    else:
+        history = _gemini_sessions.get(session_id, [])
+        normalized = []
+        for content in history:
+            role  = getattr(content, "role", "?")
+            texts = []
+            for part in getattr(content, "parts", []) or []:
+                if getattr(part, "text", None):
+                    texts.append(part.text)
+                elif getattr(part, "function_call", None) and part.function_call.name:
+                    texts.append(f"[Calling {part.function_call.name}]")
+                elif getattr(part, "function_response", None) and part.function_response.name:
+                    texts.append(f"[Tool result: {part.function_response.name}]")
+            normalized.append({
+                "role":    "assistant" if role == "model" else role,
+                "content": " ".join(texts),
+            })
+        return normalized
 
 
 @app.delete("/history")
 def clear_history(session_id: str = "default"):
-    _sessions.pop(session_id, None)
+    if USE_CLAUDE:
+        _claude_sessions.pop(session_id, None)
+    else:
+        _gemini_sessions.pop(session_id, None)
     return {"status": "cleared", "session_id": session_id}
 
 
