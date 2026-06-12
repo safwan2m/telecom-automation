@@ -119,7 +119,7 @@ services:
       # ── Claude CLI backend (active when CLAUDE_CLI_PATH is non-empty) ──
       # Always points to the npm-installed binary inside the container.
       # Host CLAUDE_CLI_PATH (Windows path) is intentionally NOT forwarded here.
-      CLAUDE_CLI_PATH: /usr/local/bin/claude
+      CLAUDE_CLI_PATH: /usr/bin/claude
       ANTHROPIC_MODEL_NAME: ${ANTHROPIC_MODEL_NAME:-sonnet}
       # ── Shared ──
       CONTROLLER_URL: http://controller:8080
