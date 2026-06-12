@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
 """
-Network Map Server — live Leaflet.js map of all Malleswaram cells.
+Network Map Server — live Leaflet.js map of all Malleswaram cells + AI chat panel.
 
-GET /          Leaflet map page (auto-refreshes every 30 s)
+GET /          Leaflet map page with right-side AI chat
 GET /api/cells Cell list + live KPIs + RF coverage radius (JSON)
-GET /health
+POST /api/chat         Proxy → orchestrator /chat
+GET  /api/history      Proxy → orchestrator /history
+DELETE /api/history    Proxy → orchestrator /history
+GET  /api/tools        Proxy → orchestrator /tools
+GET  /api/orch-health  Proxy → orchestrator /health
+GET  /health
 """
 
 import math
 import os
 import logging
 import httpx
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Query
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-CONTROLLER_URL = os.environ.get("CONTROLLER_URL", "http://controller:8080")
+CONTROLLER_URL    = os.environ.get("CONTROLLER_URL",    "http://controller:8080")
+ORCHESTRATOR_URL  = os.environ.get("ORCHESTRATOR_URL",  "http://orchestrator:8082")
 
 app = FastAPI(title="Telecom Map Server", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -68,24 +75,29 @@ MAP_HTML = """<!DOCTYPE html>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f1117; color: #e0e0e0;
-         height: 100vh; display: flex; flex-direction: column; }
+         height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
   #header { background: #1a1d27; border-bottom: 1px solid #2d3142;
-            padding: 10px 18px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+            padding: 10px 18px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
   #header h1 { font-size: 1.1rem; font-weight: 600; color: #fff; letter-spacing: .5px; }
   .badge { font-size: 0.75rem; background: #2d3142; border-radius: 12px;
            padding: 3px 10px; color: #a0a8c0; }
   .badge.live { background: #1a3a2a; color: #4ade80; }
   #controls { background: #1a1d27; border-bottom: 1px solid #2d3142;
               padding: 8px 18px; display: flex; gap: 12px; flex-wrap: wrap;
-              align-items: center; font-size: 0.8rem; }
+              align-items: center; font-size: 0.8rem; flex-shrink: 0; }
   #controls label { cursor: pointer; display: flex; align-items: center; gap: 5px; }
   #controls input[type=checkbox] { accent-color: #60a5fa; }
   #refresh-btn { margin-left: auto; background: #2563eb; border: none; color: #fff;
                  padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
   #refresh-btn:hover { background: #1d4ed8; }
-  #map { flex: 1; }
+
+  /* ── main content row ── */
+  #content-wrapper { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+  #map { flex: 1; min-width: 0; }
+
   #statusbar { background: #1a1d27; border-top: 1px solid #2d3142;
-               padding: 5px 18px; font-size: 0.72rem; color: #6b7280; display: flex; gap: 20px; }
+               padding: 5px 18px; font-size: 0.72rem; color: #6b7280;
+               display: flex; gap: 20px; flex-shrink: 0; }
   .legend { background: #1a1d27; border: 1px solid #2d3142; border-radius: 8px;
             padding: 10px 14px; font-size: 0.75rem; line-height: 1.8; min-width: 185px; }
   .legend b { color: #fff; }
@@ -103,6 +115,182 @@ MAP_HTML = """<!DOCTYPE html>
   .popup-label { color: #9ca3af; }
   .popup-val { color: #e0e0e0; font-weight: 500; }
   .overload { color: #f87171 !important; font-weight: 700; }
+
+  /* ── chat panel ── */
+  #chat-panel {
+    width: 380px;
+    min-width: 380px;
+    display: flex;
+    flex-direction: column;
+    background: #141720;
+    border-left: 1px solid #2d3142;
+    transition: width 0.2s ease, min-width 0.2s ease;
+  }
+  #chat-panel.collapsed {
+    width: 36px;
+    min-width: 36px;
+    overflow: hidden;
+  }
+  #chat-panel.collapsed #chat-body { display: none; }
+
+  #chat-header {
+    padding: 8px 10px;
+    border-bottom: 1px solid #2d3142;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: #1a1d27;
+    flex-shrink: 0;
+    min-height: 40px;
+  }
+  #chat-header h2 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #fff;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  #orch-status { font-size: 0.68rem; color: #6b7280; white-space: nowrap; }
+  #orch-dot { font-size: 0.7rem; color: #6b7280; }
+  #clear-chat-btn {
+    background: none;
+    border: 1px solid #2d3142;
+    color: #9ca3af;
+    padding: 2px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    white-space: nowrap;
+  }
+  #clear-chat-btn:hover { color: #f87171; border-color: #f87171; }
+  #toggle-chat-btn {
+    background: none;
+    border: 1px solid #2d3142;
+    color: #9ca3af;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+  }
+  #toggle-chat-btn:hover { color: #60a5fa; border-color: #60a5fa; }
+
+  #chat-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    scroll-behavior: smooth;
+  }
+  #messages::-webkit-scrollbar { width: 5px; }
+  #messages::-webkit-scrollbar-track { background: #0f1117; }
+  #messages::-webkit-scrollbar-thumb { background: #2d3142; border-radius: 3px; }
+
+  .msg { max-width: 100%; padding: 7px 10px; border-radius: 8px;
+         font-size: 0.78rem; line-height: 1.5; word-break: break-word; }
+  .msg .msg-label { font-size: 0.62rem; color: #6b7280; margin-bottom: 3px; font-weight: 600;
+                    text-transform: uppercase; letter-spacing: 0.5px; }
+  .msg .msg-body { white-space: pre-wrap; }
+  .msg.user { background: #1e3a5f; color: #bfdbfe;
+              align-self: flex-end; max-width: 90%;
+              border-radius: 8px 8px 2px 8px; }
+  .msg.agent { background: #1e2433; color: #e0e0e0;
+               border: 1px solid #2d3142; align-self: flex-start;
+               border-radius: 2px 8px 8px 8px; max-width: 100%; }
+  .msg.system-msg { background: #1a2a1a; color: #4ade80; font-size: 0.7rem;
+                    align-self: center; border-radius: 4px; padding: 3px 10px; text-align: center; }
+  .msg.error-msg { background: #2a1a1a; color: #f87171;
+                   align-self: center; font-size: 0.7rem; border-radius: 4px; padding: 3px 10px; }
+
+  /* agent message markdown-lite table */
+  .msg.agent table { border-collapse: collapse; width: 100%; margin-top: 4px; font-size: 0.72rem; }
+  .msg.agent th, .msg.agent td { border: 1px solid #2d3142; padding: 3px 7px; text-align: left; }
+  .msg.agent th { background: #2d3142; color: #e0e0e0; }
+  .msg.agent code { background: #0f1117; padding: 1px 4px; border-radius: 3px;
+                    font-family: monospace; font-size: 0.72rem; color: #a78bfa; }
+
+  .typing-indicator { display: flex; gap: 4px; align-items: center; padding: 8px 10px; }
+  .typing-indicator span { width: 6px; height: 6px; background: #4b5563; border-radius: 50%;
+                            animation: typebounce 1.2s infinite; display: inline-block; }
+  .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes typebounce {
+    0%,80%,100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+
+  #shortcuts {
+    padding: 6px 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    border-top: 1px solid #2d3142;
+    flex-shrink: 0;
+    background: #1a1d27;
+  }
+  .sc-btn {
+    background: #2d3142;
+    border: none;
+    color: #9ca3af;
+    padding: 3px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-family: 'Consolas', monospace;
+    transition: background 0.15s;
+  }
+  .sc-btn:hover { background: #3d4260; color: #e0e0e0; }
+
+  #input-area {
+    padding: 8px 10px;
+    border-top: 1px solid #2d3142;
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+    flex-shrink: 0;
+    background: #1a1d27;
+  }
+  #chat-input {
+    flex: 1;
+    background: #0f1117;
+    border: 1px solid #2d3142;
+    color: #e0e0e0;
+    padding: 6px 9px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-family: inherit;
+    resize: none;
+    min-height: 32px;
+    max-height: 96px;
+    line-height: 1.4;
+    overflow-y: auto;
+  }
+  #chat-input:focus { outline: none; border-color: #2563eb; }
+  #chat-input::placeholder { color: #4b5563; }
+  #send-btn {
+    background: #2563eb;
+    border: none;
+    color: #fff;
+    padding: 6px 13px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    height: 32px;
+  }
+  #send-btn:hover { background: #1d4ed8; }
+  #send-btn:disabled { background: #374151; cursor: default; }
 </style>
 </head>
 <body>
@@ -122,7 +310,38 @@ MAP_HTML = """<!DOCTYPE html>
   <label><input type="checkbox" id="showCoverage" checked> Coverage circles</label>
   <button id="refresh-btn" onclick="fetchCells()">&#8635; Refresh</button>
 </div>
-<div id="map"></div>
+
+<div id="content-wrapper">
+  <div id="map"></div>
+
+  <!-- ── AI Chat Panel ── -->
+  <div id="chat-panel">
+    <div id="chat-header">
+      <span id="orch-dot">&#9679;</span>
+      <h2>AI Network Assistant</h2>
+      <span id="orch-status">connecting…</span>
+      <button id="clear-chat-btn" title="Clear conversation">Clear</button>
+      <button id="toggle-chat-btn" title="Collapse chat panel">&#9664;</button>
+    </div>
+    <div id="chat-body">
+      <div id="messages"></div>
+      <div id="shortcuts">
+        <button class="sc-btn" data-cmd="/status">/status</button>
+        <button class="sc-btn" data-cmd="/alerts">/alerts</button>
+        <button class="sc-btn" data-cmd="/cells">/cells</button>
+        <button class="sc-btn" data-cmd="/plan">/plan</button>
+        <button class="sc-btn" data-cmd="/history">/history</button>
+        <button class="sc-btn" data-cmd="/tools">/tools</button>
+        <button class="sc-btn" data-cmd="/clear">/clear</button>
+      </div>
+      <div id="input-area">
+        <textarea id="chat-input" rows="1" placeholder="Ask about cells, alerts, plans… (Enter to send)"></textarea>
+        <button id="send-btn">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="statusbar">
   <span id="stat-total"></span>
   <span id="stat-5g"></span>
@@ -130,8 +349,10 @@ MAP_HTML = """<!DOCTYPE html>
   <span id="stat-overload"></span>
   <span id="stat-ues"></span>
 </div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+// ── Map setup ────────────────────────────────────────────────────────────────
 const VENDOR_COLOR = { Nokia: '#60a5fa', Ericsson: '#4ade80', Samsung: '#a78bfa', ZTE: '#fb923c' };
 
 const map = L.map('map', { zoomControl: true }).setView([13.000, 77.570], 14);
@@ -298,6 +519,268 @@ async function fetchCells() {
 
 fetchCells();
 setInterval(fetchCells, 30000);
+
+// ── Chat panel ───────────────────────────────────────────────────────────────
+
+const CHAT_SHORTCUTS = {
+  '/status': 'What is the current status of all cells, DUs, and CUs? Summarise in a table.',
+  '/alerts': 'Show me all recent KPI alerts from the last 60 minutes.',
+  '/cells':  'List all cells with their current connected UEs, PRB utilisation, and which DU they belong to.',
+  '/plan':   'Generate a network plan for Bangalore with default parameters and show me the summary.',
+};
+
+let chatSession = 'default';
+let chatBusy = false;
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Minimal markdown renderer: bold, code, bullet lists, tables
+function renderMarkdown(text) {
+  const lines = text.split('\\n');
+  let html = '';
+  let inTable = false;
+  let tableHeaderDone = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Detect markdown table
+    if (/^\\s*\\|/.test(line)) {
+      if (!inTable) {
+        html += '<table>';
+        inTable = true;
+        tableHeaderDone = false;
+      }
+      if (/^\\s*\\|[-:| ]+\\|\\s*$/.test(line)) {
+        tableHeaderDone = true;
+        continue;
+      }
+      const cells = line.trim().replace(/^\\|/, '').replace(/\\|$/, '').split('|');
+      const tag = !tableHeaderDone ? 'th' : 'td';
+      html += '<tr>' + cells.map(c => `<${tag}>${escHtml(c.trim())}</${tag}>`).join('') + '</tr>';
+      continue;
+    } else if (inTable) {
+      html += '</table>';
+      inTable = false;
+    }
+
+    // Bullet points
+    if (/^\\s*[•\\-\\*] /.test(line)) {
+      line = '• ' + line.replace(/^\\s*[•\\-\\*] /, '');
+    }
+
+    // Bold **text** and *text*
+    line = escHtml(line)
+      .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
+      .replace(/\\*([^*]+)\\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    html += line + '\\n';
+  }
+  if (inTable) html += '</table>';
+  return html;
+}
+
+function scrollMsgs() {
+  const el = document.getElementById('messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function addMsg(role, text) {
+  const msgs = document.getElementById('messages');
+  const wrap = document.createElement('div');
+
+  if (role === 'system') {
+    wrap.className = 'msg system-msg';
+    wrap.textContent = text;
+  } else if (role === 'error') {
+    wrap.className = 'msg error-msg';
+    wrap.textContent = '⚠ ' + text;
+  } else {
+    wrap.className = `msg ${role}`;
+    const label = document.createElement('div');
+    label.className = 'msg-label';
+    label.textContent = role === 'user' ? 'You' : 'AI Agent';
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    if (role === 'agent') {
+      body.innerHTML = renderMarkdown(text);
+    } else {
+      body.textContent = text;
+    }
+    wrap.appendChild(label);
+    wrap.appendChild(body);
+  }
+
+  msgs.appendChild(wrap);
+  scrollMsgs();
+  return wrap;
+}
+
+function showTyping() {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg agent';
+  div.id = 'typing-bubble';
+  div.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+  msgs.appendChild(div);
+  scrollMsgs();
+}
+
+function hideTyping() {
+  const t = document.getElementById('typing-bubble');
+  if (t) t.remove();
+}
+
+async function sendChat(rawInput) {
+  const text = rawInput.trim();
+  if (!text || chatBusy) return;
+
+  const input = document.getElementById('chat-input');
+  const btn   = document.getElementById('send-btn');
+  input.value = '';
+  input.style.height = '';
+  chatBusy = true;
+  btn.disabled = true;
+
+  // Special local commands
+  if (text === '/history') {
+    try {
+      const r = await fetch(`/api/history?session_id=${chatSession}`);
+      const hist = await r.json();
+      if (!Array.isArray(hist) || hist.length === 0) {
+        addMsg('system', 'No history yet.');
+      } else {
+        hist.forEach(m => {
+          const role = m.role === 'user' ? 'user' : 'agent';
+          const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+          addMsg(role, c.length > 600 ? c.slice(0, 600) + '…' : c);
+        });
+      }
+    } catch(e) { addMsg('error', 'Could not load history.'); }
+    chatBusy = false; btn.disabled = false;
+    return;
+  }
+
+  if (text === '/clear') {
+    try {
+      await fetch(`/api/history?session_id=${chatSession}`, { method: 'DELETE' });
+      document.getElementById('messages').innerHTML = '';
+      addMsg('system', 'Conversation cleared.');
+    } catch(e) { addMsg('error', 'Could not clear history.'); }
+    chatBusy = false; btn.disabled = false;
+    return;
+  }
+
+  if (text === '/tools') {
+    try {
+      const r = await fetch('/api/tools');
+      const tools = await r.json();
+      const body = Array.isArray(tools)
+        ? tools.map(t => `• ${t.name} — ${(t.description||'').slice(0,80)}`).join('\\n')
+        : JSON.stringify(tools, null, 2);
+      addMsg('agent', body);
+    } catch(e) { addMsg('error', 'Could not load tools.'); }
+    chatBusy = false; btn.disabled = false;
+    return;
+  }
+
+  // Send to orchestrator
+  const message = CHAT_SHORTCUTS[text] || text;
+  addMsg('user', text);
+  showTyping();
+
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id: chatSession }),
+    });
+    hideTyping();
+    const resp = await r.text();
+    if (r.ok) {
+      addMsg('agent', resp);
+    } else {
+      addMsg('error', `HTTP ${r.status}: ${resp.slice(0, 200)}`);
+    }
+  } catch(e) {
+    hideTyping();
+    addMsg('error', 'Orchestrator unreachable — is the system running?');
+  }
+
+  chatBusy = false;
+  btn.disabled = false;
+}
+
+async function checkOrchHealth() {
+  const dot    = document.getElementById('orch-dot');
+  const status = document.getElementById('orch-status');
+  try {
+    const r = await fetch('/api/orch-health');
+    if (r.ok) {
+      const h = await r.json();
+      dot.style.color    = '#4ade80';
+      status.textContent = h.model ? `model: ${h.model}` : 'online';
+      status.style.color = '#4ade80';
+    } else {
+      throw new Error('not ok');
+    }
+  } catch(_) {
+    dot.style.color    = '#f87171';
+    status.textContent = 'offline';
+    status.style.color = '#6b7280';
+  }
+}
+
+// Toggle collapse
+let chatCollapsed = false;
+document.getElementById('toggle-chat-btn').addEventListener('click', () => {
+  chatCollapsed = !chatCollapsed;
+  document.getElementById('chat-panel').classList.toggle('collapsed', chatCollapsed);
+  document.getElementById('toggle-chat-btn').innerHTML = chatCollapsed ? '&#9654;' : '&#9664;';
+  // Let Leaflet know map size changed
+  setTimeout(() => map.invalidateSize(), 220);
+});
+
+// Clear button in chat header
+document.getElementById('clear-chat-btn').addEventListener('click', async () => {
+  try {
+    await fetch(`/api/history?session_id=${chatSession}`, { method: 'DELETE' });
+    document.getElementById('messages').innerHTML = '';
+    addMsg('system', 'Conversation cleared.');
+  } catch(_) { addMsg('error', 'Could not clear.'); }
+});
+
+// Shortcut buttons
+document.querySelectorAll('.sc-btn').forEach(btn => {
+  btn.addEventListener('click', () => sendChat(btn.dataset.cmd));
+});
+
+// Send button
+document.getElementById('send-btn').addEventListener('click', () => {
+  sendChat(document.getElementById('chat-input').value);
+});
+
+// Enter to send, Shift+Enter for newline
+document.getElementById('chat-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChat(e.target.value);
+  }
+});
+
+// Auto-resize textarea
+document.getElementById('chat-input').addEventListener('input', function() {
+  this.style.height = '';
+  this.style.height = Math.min(this.scrollHeight, 96) + 'px';
+});
+
+// Init
+checkOrchHealth();
+setInterval(checkOrchHealth, 30000);
+addMsg('system', 'Connected — ask about cells, alerts, DUs, or network plans.');
 </script>
 </body>
 </html>"""
@@ -350,6 +833,69 @@ def api_cells():
             "kpi":              kpi,
         })
     return {"cells": cells, "total": len(cells)}
+
+
+# ── Orchestrator proxy routes ─────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str = "default"
+
+
+@app.post("/api/chat")
+def api_chat(req: ChatRequest):
+    try:
+        r = httpx.post(
+            f"{ORCHESTRATOR_URL}/chat",
+            json={"message": req.message, "session_id": req.session_id},
+            timeout=120.0,
+        )
+        return Response(content=r.text, status_code=r.status_code, media_type="text/plain")
+    except Exception as e:
+        log.warning("Orchestrator unreachable for /chat: %s", e)
+        return Response(content=str(e), status_code=503, media_type="text/plain")
+
+
+@app.get("/api/history")
+def api_history(session_id: str = Query("default")):
+    try:
+        r = httpx.get(f"{ORCHESTRATOR_URL}/history",
+                      params={"session_id": session_id}, timeout=10.0)
+        return Response(content=r.text, status_code=r.status_code, media_type="application/json")
+    except Exception as e:
+        log.warning("Orchestrator unreachable for /history: %s", e)
+        return JSONResponse([], status_code=503)
+
+
+@app.delete("/api/history")
+def api_history_delete(session_id: str = Query("default")):
+    try:
+        r = httpx.delete(f"{ORCHESTRATOR_URL}/history",
+                         params={"session_id": session_id}, timeout=10.0)
+        return Response(content=r.text, status_code=r.status_code, media_type="application/json")
+    except Exception as e:
+        log.warning("Orchestrator unreachable for DELETE /history: %s", e)
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+
+@app.get("/api/tools")
+def api_tools():
+    try:
+        r = httpx.get(f"{ORCHESTRATOR_URL}/tools", timeout=10.0)
+        return Response(content=r.text, status_code=r.status_code, media_type="application/json")
+    except Exception as e:
+        log.warning("Orchestrator unreachable for /tools: %s", e)
+        return JSONResponse([], status_code=503)
+
+
+@app.get("/api/orch-health")
+def api_orch_health():
+    try:
+        r = httpx.get(f"{ORCHESTRATOR_URL}/health", timeout=5.0)
+        return Response(content=r.text, status_code=r.status_code, media_type="application/json")
+    except Exception as e:
+        log.warning("Orchestrator unreachable for /health: %s", e)
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=503)
 
 
 @app.get("/health")
