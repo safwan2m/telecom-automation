@@ -178,7 +178,7 @@ lbl(s2, 2.7, 2.35, 1.5, 0.35, 'POST /chat', fsize=7, fc=BLUE)
 
 # 3. Orchestrator → Gemini (prompt)
 arrow(s2, 3.3, 3.1, 4.3, 3.1, color=QARROW)
-lbl(s2, 3.3, 2.75, 1.05, 0.35, 'prompt +\nsnapshot', fsize=7, fc=BLUE)
+lbl(s2, 3.3, 2.75, 1.05, 0.35, 'SYSTEM_PROMPT\n+ snapshot\n+ history', fsize=7, fc=BLUE)
 
 # 4. Gemini → Orchestrator (function call: query_cell — U2 key difference)
 arrow(s2, 4.3, 3.55, 3.3, 3.55, color=RARROW)
@@ -241,18 +241,19 @@ lbl(s3, 0.3, 0.05, 10.0, 0.8, 'U2 Query — Step-by-Step Trace',
 
 steps = [
     ('1',  'User',         'Types query into chat.py'),
-    ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-    ('3',  'Orchestrator', 'Injects live network snapshot into system prompt; calls Gemini'),
-    ('4',  'Gemini LLM',   'Identifies cell name MLS_RWS_01; emits query_cell(cell_id="MLS_RWS_01")'),
-    ('5',  'Orchestrator', 'Dispatches query_cell → GET /cells/MLS_RWS_01 on Controller'),
-    ('6',  'Controller',   'Reads topology.json for MLS_RWS_01 config (PCI, band, DU/CU assignment)'),
-    ('7',  'Controller',   'Runs Flux query against InfluxDB: 30-min KPI time series for MLS_RWS_01'),
-    ('8',  'Controller',   'Returns merged cell config + 30-min KPI time series'),
-    ('9',  'Orchestrator', 'Passes tool result (cell detail) back to Gemini'),
-    ('10', 'Gemini LLM',   'Extracts the latest connected_ues value from the KPI time series'),
-    ('11', 'Gemini LLM',   'Generates natural language answer: "MLS_RWS_01 currently has X UEs connected."'),
-    ('12', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-    ('13', 'chat.py',      'Prints answer to user'),
+    ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag for named sessions)'),
+    ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends live snapshot to SYSTEM_PROMPT'),
+    ('4',  'Orchestrator', 'Sends SYSTEM_PROMPT + live snapshot + session history (types.Content) to Gemini'),
+    ('5',  'Gemini LLM',   'Identifies cell name MLS_RWS_01; emits query_cell(cell_id="MLS_RWS_01")'),
+    ('6',  'Orchestrator', 'Dispatches query_cell → GET /cells/MLS_RWS_01 on Controller; yields *[calling tool...]* inline'),
+    ('7',  'Controller',   'Reads topology.json for MLS_RWS_01 config (PCI, band, DU/CU assignment)'),
+    ('8',  'Controller',   'Runs Flux query against InfluxDB: 30-min KPI time series for MLS_RWS_01'),
+    ('9',  'Controller',   'Returns merged cell config + 30-min KPI time series'),
+    ('10', 'Orchestrator', 'JSON-sanitises result (json.dumps default=str); appends FunctionResponse to session history; re-calls Gemini'),
+    ('11', 'Gemini LLM',   'Extracts latest connected_ues from 30-min KPI series; no further tool calls → loop exits'),
+    ('12', 'Gemini LLM',   'Generates NL answer: "MLS_RWS_01 currently has X UEs connected."'),
+    ('13', 'Orchestrator', 'Streams text/plain chunks via sync generator (Starlette thread pool → StreamingResponse)'),
+    ('14', 'chat.py',      'Prints streamed answer to operator terminal'),
 ]
 
 col_colors = {

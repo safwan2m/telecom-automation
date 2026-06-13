@@ -176,7 +176,7 @@ lbl(s2, 2.7, 2.35, 1.5, 0.35, 'POST /chat', fsize=7, fc=BLUE)
 
 # 3. Orchestrator → Gemini
 arrow(s2, 3.3, 3.1, 4.3, 3.1, color=QARROW)
-lbl(s2, 3.3, 2.75, 1.05, 0.35, 'prompt +\nsnapshot', fsize=7, fc=BLUE)
+lbl(s2, 3.3, 2.75, 1.05, 0.35, 'SYSTEM_PROMPT\n+ snapshot\n+ history', fsize=7, fc=BLUE)
 
 # 4. Gemini → Orchestrator (function call: query_network — same as U1)
 arrow(s2, 4.3, 3.55, 3.3, 3.55, color=RARROW)
@@ -239,18 +239,19 @@ lbl(s3, 0.3, 0.05, 10.0, 0.8, 'U3 Query — Step-by-Step Trace',
 
 steps = [
     ('1',  'User',         'Types query into chat.py'),
-    ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-    ('3',  'Orchestrator', 'Injects live network snapshot into system prompt; calls Gemini'),
-    ('4',  'Gemini LLM',   'Decides query_network is the correct tool; emits function call'),
-    ('5',  'Orchestrator', 'Dispatches query_network → GET /network on Controller'),
-    ('6',  'Controller',   'Reads topology.json for cell/DU/CU configuration'),
-    ('7',  'Controller',   'Runs Flux query against InfluxDB: latest connected_ues per cell'),
-    ('8',  'Controller',   'Merges topology + KPIs; returns full 30-cell network snapshot'),
-    ('9',  'Orchestrator', 'Passes tool result back to Gemini'),
-    ('10', 'Gemini LLM',   'Ranks all 30 cells by connected_ues; identifies the cell with the highest count'),
-    ('11', 'Gemini LLM',   'Generates natural language answer: "Cell X is serving the most UEs with Y connected."'),
-    ('12', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-    ('13', 'chat.py',      'Prints answer to user'),
+    ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag for named sessions)'),
+    ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends live snapshot to SYSTEM_PROMPT'),
+    ('4',  'Orchestrator', 'Sends SYSTEM_PROMPT + live snapshot + session history (types.Content) to Gemini'),
+    ('5',  'Gemini LLM',   'Decides query_network is the correct tool; emits function call: query_network()'),
+    ('6',  'Orchestrator', 'Dispatches query_network → GET /network on Controller; yields *[calling tool...]* inline'),
+    ('7',  'Controller',   'Reads topology.json for cell/DU/CU configuration'),
+    ('8',  'Controller',   'Runs Flux query against InfluxDB: latest connected_ues per cell'),
+    ('9',  'Controller',   'Merges topology + KPIs; returns full 30-cell network snapshot'),
+    ('10', 'Orchestrator', 'JSON-sanitises result (json.dumps default=str); appends FunctionResponse to session history; re-calls Gemini'),
+    ('11', 'Gemini LLM',   'Ranks all 30 cells by connected_ues desc; identifies top cell; no further tool calls → loop exits'),
+    ('12', 'Gemini LLM',   'Generates NL answer: "MLS_RWS_01 is serving the most UEs with X connected."'),
+    ('13', 'Orchestrator', 'Streams text/plain chunks via sync generator (Starlette thread pool → StreamingResponse)'),
+    ('14', 'chat.py',      'Prints streamed answer to operator terminal'),
 ]
 
 col_colors = {

@@ -130,7 +130,7 @@ def _common_user_arrows(s):
     arr(s, 4.25, 2.0,   2.2,  2.95)
     lbl(s, 2.7,  2.35,  1.5,  0.35, 'POST /chat', fs=7, fc=BLUE)
     arr(s, 3.3,  3.1,   4.3,  3.1)
-    lbl(s, 3.3,  2.75,  1.05, 0.35, 'prompt +\nsnapshot', fs=7, fc=BLUE)
+    lbl(s, 3.3,  2.75,  1.05, 0.35, 'SYSTEM_PROMPT\n+ snapshot\n+ history', fs=7, fc=BLUE)
 
 def _common_return_arrows(s):
     arr(s, 1.9, 4.9, 1.9, 3.8, color=RA, dashed=True)
@@ -208,7 +208,7 @@ def no_tool_slide(prs, header, gemini_note_lines):
     arr(s, 4.25, 2.0, 2.2, 2.95)
     lbl(s, 2.7, 2.35, 1.5, 0.35, 'POST /chat', fs=7, fc=BLUE)
     arr(s, 3.3, 3.1, 4.3, 3.1)
-    lbl(s, 3.3, 2.75, 1.05, 0.35, 'prompt +\nfull history', fs=7, fc=BLUE)
+    lbl(s, 3.3, 2.75, 1.05, 0.35, 'SYSTEM_PROMPT\n+ snapshot\n+ history', fs=7, fc=BLUE)
     arr(s, 4.3, 5.3, 3.3, 2.2, color=RA, dashed=True)
     arr(s, 2.25, 2.05, 1.85, 1.75, color=RA, dashed=True)
     lbl(s, 0.6, 2.5, 1.4, 0.35, 'NL reply', fs=7, fc=GREEN)
@@ -295,14 +295,14 @@ def make_f1():
         ['Reads plan from context:', 'density_weight + budget', '→ explains site selection'])
     steps_slide(prs, 'F1 Query — Step-by-Step Trace', [
         ('1',  'User',         'Types follow-up query into chat.py'),
-        ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3',  'Orchestrator', 'Injects conversation history including plan_network result'),
-        ('4',  'Gemini LLM',   'No tool call — reads plan details from conversation context'),
-        ('5',  'Gemini LLM',   'Identifies candidate site density_weight and budget fit'),
-        ('6',  'Gemini LLM',   'Explains SINR margin, PCI assignment, DU selection logic'),
-        ('7',  'Gemini LLM',   'Generates natural language explanation of site selection'),
-        ('8',  'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-        ('9',  'chat.py',      'Prints explanation to user'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends snapshot to SYSTEM_PROMPT'),
+        ('4',  'Orchestrator', 'Sends SYSTEM_PROMPT + snapshot + full session history (types.Content) to Gemini'),
+        ('5',  'Gemini LLM',   'No tool call — reads plan_network result from session history'),
+        ('6',  'Gemini LLM',   'Identifies candidate site density_weight and budget fit'),
+        ('7',  'Gemini LLM',   'Explains SINR margin, PCI assignment, DU selection logic; loop exits (no tool calls)'),
+        ('8',  'Orchestrator', 'Streams text/plain chunks via sync generator (Starlette thread pool → StreamingResponse)'),
+        ('9',  'chat.py',      'Prints streamed explanation to operator terminal'),
     ])
     prs.save(os.path.join(OUT, 'F1_Query_Flow.pptx'))
     print('Saved F1_Query_Flow.pptx')
@@ -325,18 +325,17 @@ def make_f2():
         ['Cross-ref plan cells', 'vs current topology', '→ list affected cells'])
     steps_slide(prs, 'F2 Query — Step-by-Step Trace', [
         ('1',  'User',         'Types follow-up query into chat.py'),
-        ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3',  'Orchestrator', 'Injects conversation history (plan result) + user message'),
-        ('4',  'Gemini LLM',   'Emits query_network() to get current topology'),
-        ('5',  'Orchestrator', 'Dispatches query_network → GET /network on Controller'),
-        ('6',  'Controller',   'Reads topology.json + InfluxDB KPIs'),
-        ('7',  'Controller',   'Returns current 30-cell network snapshot'),
-        ('8',  'Orchestrator', 'Passes tool result to Gemini'),
-        ('9',  'Gemini LLM',   'Reads new plan cells from conversation history'),
-        ('10', 'Gemini LLM',   'Cross-references plan cells vs existing cells (proximity, PCI)'),
-        ('11', 'Gemini LLM',   'Generates list of affected cells with reasoning'),
-        ('12', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-        ('13', 'chat.py',      'Prints affected cell list to user'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends snapshot to SYSTEM_PROMPT; sends full session history to Gemini'),
+        ('4',  'Gemini LLM',   'Emits query_network() to get current topology for cross-referencing'),
+        ('5',  'Orchestrator', 'Dispatches query_network → GET /network on Controller; yields *[calling tool...]* inline'),
+        ('6',  'Controller',   'Reads topology.json + InfluxDB KPIs; returns 30-cell snapshot'),
+        ('7',  'Orchestrator', 'JSON-sanitises result; appends FunctionResponse to session history; re-calls Gemini (while True loop)'),
+        ('8',  'Gemini LLM',   'Reads new plan cells from session history'),
+        ('9',  'Gemini LLM',   'Cross-references plan cells vs existing cells (proximity, PCI); loop exits'),
+        ('10', 'Gemini LLM',   'Generates list of affected cells with reasoning'),
+        ('11', 'Orchestrator', 'Streams text/plain chunks via sync generator (StreamingResponse)'),
+        ('12', 'chat.py',      'Prints streamed affected cell list to operator terminal'),
     ])
     prs.save(os.path.join(OUT, 'F2_Query_Flow.pptx'))
     print('Saved F2_Query_Flow.pptx')
@@ -361,18 +360,17 @@ def make_a1():
         influx_lines=['InfluxDB alerts', 'OVERLOAD/SINR_LOW/\nPOWER_WASTE/UNDERLOAD'])
     steps_slide(prs, 'A1 Query — Step-by-Step Trace', [
         ('1',  'User',         'Types query into chat.py'),
-        ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3',  'Orchestrator', 'Injects live network snapshot into system prompt; calls Gemini'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends snapshot to SYSTEM_PROMPT; sends to Gemini'),
         ('4',  'Gemini LLM',   'Emits get_alerts(minutes=60) — all severities and types'),
-        ('5',  'Orchestrator', 'Dispatches get_alerts → GET /alerts?minutes=60 on Controller'),
-        ('6',  'Controller',   'Queries InfluxDB alerts measurement for last 60 min'),
+        ('5',  'Orchestrator', 'Dispatches get_alerts → queries InfluxDB directly via Flux; yields *[calling tool...]* inline'),
+        ('6',  'Controller',   'Flux query on InfluxDB alerts measurement: last 60 min, all severities'),
         ('7',  'InfluxDB',     'Returns alert records written by KPI Agent LSTM classifier'),
-        ('8',  'Controller',   'Returns alert list sorted by severity and timestamp'),
-        ('9',  'Orchestrator', 'Passes tool result to Gemini'),
-        ('10', 'Gemini LLM',   'Groups alerts by severity (CRITICAL/WARNING/INFO) and type'),
-        ('11', 'Gemini LLM',   'Generates natural language anomaly summary'),
-        ('12', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-        ('13', 'chat.py',      'Prints anomaly report to user'),
+        ('8',  'Orchestrator', 'JSON-sanitises result; appends FunctionResponse to session history; re-calls Gemini (while True loop)'),
+        ('9',  'Gemini LLM',   'Groups alerts by severity (CRITICAL/WARNING/INFO) and type; loop exits'),
+        ('10', 'Gemini LLM',   'Generates natural language anomaly summary'),
+        ('11', 'Orchestrator', 'Streams text/plain chunks via sync generator (StreamingResponse)'),
+        ('12', 'chat.py',      'Prints streamed anomaly report to operator terminal'),
     ])
     prs.save(os.path.join(OUT, 'A1_Query_Flow.pptx'))
     print('Saved A1_Query_Flow.pptx')
@@ -397,17 +395,16 @@ def make_a2():
         influx_lines=['InfluxDB alerts', 'filter: OVERLOAD\n+ confidence ≥ 0.70'])
     steps_slide(prs, 'A2 Query — Step-by-Step Trace (Path A)', [
         ('1',  'User',         'Types query into chat.py'),
-        ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3',  'Orchestrator', 'Injects live network snapshot; calls Gemini'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends snapshot to SYSTEM_PROMPT; sends to Gemini'),
         ('4',  'Gemini LLM',   'Emits get_alerts(alert_type="OVERLOAD", minutes=60)'),
-        ('5',  'Orchestrator', 'GET /alerts?alert_type=OVERLOAD on Controller'),
-        ('6',  'Controller',   'Queries InfluxDB alerts filtered by OVERLOAD type'),
-        ('7',  'InfluxDB',     'Returns OVERLOAD records with cell_id, severity, confidence'),
-        ('8',  'Orchestrator', 'Passes alert list to Gemini'),
-        ('9',  'Gemini LLM',   'Lists overloaded cells with severity and confidence score'),
-        ('10', 'Gemini LLM',   'Generates natural language overload report'),
-        ('11', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-        ('12', 'chat.py',      'Prints overloaded cell list to user'),
+        ('5',  'Orchestrator', 'Dispatches get_alerts → direct Flux query on InfluxDB; yields *[calling tool...]* inline'),
+        ('6',  'InfluxDB',     'Returns OVERLOAD records with cell_id, severity, confidence ≥ 0.70'),
+        ('7',  'Orchestrator', 'JSON-sanitises result; appends FunctionResponse to session history; re-calls Gemini (while True loop)'),
+        ('8',  'Gemini LLM',   'Lists overloaded cells with severity and confidence score; loop exits'),
+        ('9',  'Gemini LLM',   'Generates natural language overload report'),
+        ('10', 'Orchestrator', 'Streams text/plain chunks via sync generator (StreamingResponse)'),
+        ('11', 'chat.py',      'Prints streamed overloaded cell list to operator terminal'),
     ])
     prs.save(os.path.join(OUT, 'A2_Query_Flow.pptx'))
     print('Saved A2_Query_Flow.pptx')
@@ -429,21 +426,20 @@ def make_o1():
         ['get_alerts → overloaded', 'cells; move_cell each', 'to lightest DU'])
     steps_slide(prs, 'O1 Query — Step-by-Step Trace', [
         ('1',  'User',         'Types query into chat.py'),
-        ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3',  'Orchestrator', 'Injects live network snapshot; calls Gemini'),
-        ('4',  'Gemini LLM',   'Tool call 1: get_alerts(alert_type="OVERLOAD")'),
-        ('5',  'Orchestrator', 'GET /alerts?alert_type=OVERLOAD on Controller'),
-        ('6',  'Controller',   'Queries InfluxDB: OVERLOAD alerts from KPI Agent'),
-        ('7',  'Controller',   'Returns list of overloaded cells + their current DU'),
-        ('8',  'Orchestrator', 'Returns alert list to Gemini'),
-        ('9',  'Gemini LLM',   'Identifies lightest DU for each overloaded cell'),
-        ('10', 'Gemini LLM',   'Tool call 2: move_cell(cell_id=X, target_du_id=Y)'),
-        ('11', 'Orchestrator', 'POST /move/cell on Controller'),
-        ('12', 'Controller',   'Atomically updates topology.json (write .tmp → rename)'),
-        ('13', 'Controller',   'DU simulators pick up change within TOPO_POLL_SEC (5 s)'),
-        ('14', 'Gemini LLM',   'Repeats move_cell for each remaining overloaded cell'),
-        ('15', 'Gemini LLM',   'Generates summary: cells moved, before/after DU loads'),
-        ('16', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends snapshot to SYSTEM_PROMPT; sends to Gemini'),
+        ('4',  'Gemini LLM',   'Tool call 1: get_alerts(alert_type="OVERLOAD")  [while True loop, iteration 1]'),
+        ('5',  'Orchestrator', 'Direct Flux query on InfluxDB: OVERLOAD alerts; yields *[calling tool: get_alerts...]* inline'),
+        ('6',  'InfluxDB',     'Returns OVERLOAD records with cell_id, DU, severity, confidence'),
+        ('7',  'Orchestrator', 'JSON-sanitises; appends FunctionResponse to session history; re-calls Gemini [loop iteration 2]'),
+        ('8',  'Gemini LLM',   'Identifies lightest DU for each overloaded cell from network snapshot'),
+        ('9',  'Gemini LLM',   'Tool call 2: move_cell(cell_id=X, target_du_id=Y)  [can batch multiple tool calls per turn]'),
+        ('10', 'Orchestrator', 'POST /move/cell on Controller; yields *[calling tool: move_cell...]* inline'),
+        ('11', 'Controller',   'Atomically updates topology.json (.tmp → rename); DU simulators reload within 5 s'),
+        ('12', 'Orchestrator', 'JSON-sanitises move result; appends to history; re-calls Gemini [loop continues]'),
+        ('13', 'Gemini LLM',   'Repeats move_cell for each remaining overloaded cell until all resolved → loop exits'),
+        ('14', 'Gemini LLM',   'Generates summary: cells moved, before/after DU loads'),
+        ('15', 'Orchestrator', 'Streams text/plain chunks via sync generator (StreamingResponse)'),
     ])
     prs.save(os.path.join(OUT, 'O1_Query_Flow.pptx'))
     print('Saved O1_Query_Flow.pptx')
@@ -465,21 +461,20 @@ def make_o2():
         ['Rank by prb_dl_pct', '→ top cell + lightest DU', '→ execute move_cell'])
     steps_slide(prs, 'O2 Query — Step-by-Step Trace', [
         ('1',  'User',         'Types query into chat.py'),
-        ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3',  'Orchestrator', 'Injects live network snapshot; calls Gemini'),
-        ('4',  'Gemini LLM',   'Tool call 1: query_network() — get live PRB data'),
-        ('5',  'Orchestrator', 'GET /network on Controller'),
-        ('6',  'Controller',   'Reads topology.json + InfluxDB PRB per cell'),
-        ('7',  'Controller',   'Returns full 30-cell network snapshot'),
-        ('8',  'Orchestrator', 'Returns snapshot to Gemini'),
-        ('9',  'Gemini LLM',   'Ranks cells by prb_dl_pct (desc) → identifies most overloaded'),
-        ('10', 'Gemini LLM',   'Ranks DUs by avg PRB (asc) → identifies lightest target DU'),
-        ('11', 'Gemini LLM',   'Tool call 2: move_cell(cell_id=X, target_du_id=Y)'),
-        ('12', 'Orchestrator', 'POST /move/cell on Controller'),
-        ('13', 'Controller',   'Atomically updates topology.json'),
-        ('14', 'Controller',   'Returns move confirmation'),
-        ('15', 'Gemini LLM',   'Generates reply: cell moved, from/to DU, expected improvement'),
-        ('16', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends snapshot to SYSTEM_PROMPT; sends to Gemini'),
+        ('4',  'Gemini LLM',   'Tool call 1: query_network()  [while True loop, iteration 1]'),
+        ('5',  'Orchestrator', 'GET /network → Controller; yields *[calling tool: query_network...]* inline'),
+        ('6',  'Controller',   'Reads topology.json + InfluxDB PRB per cell; returns 30-cell snapshot'),
+        ('7',  'Orchestrator', 'JSON-sanitises; appends FunctionResponse to session history; re-calls Gemini [loop iteration 2]'),
+        ('8',  'Gemini LLM',   'Ranks cells by prb_dl_pct (desc) → most overloaded cell identified'),
+        ('9',  'Gemini LLM',   'Ranks DUs by avg PRB (asc) → lightest target DU identified'),
+        ('10', 'Gemini LLM',   'Tool call 2: move_cell(cell_id=X, target_du_id=Y)'),
+        ('11', 'Orchestrator', 'POST /move/cell on Controller; yields *[calling tool: move_cell...]* inline'),
+        ('12', 'Controller',   'Atomically updates topology.json (.tmp → rename); DU simulators reload in 5 s'),
+        ('13', 'Orchestrator', 'JSON-sanitises move result; appends to history; re-calls Gemini → loop exits (no more tools)'),
+        ('14', 'Gemini LLM',   'Generates reply: cell moved, from/to DU, expected PRB improvement'),
+        ('15', 'Orchestrator', 'Streams text/plain chunks via sync generator (StreamingResponse)'),
     ])
     prs.save(os.path.join(OUT, 'O2_Query_Flow.pptx'))
     print('Saved O2_Query_Flow.pptx')
@@ -501,20 +496,19 @@ def make_i1():
         ['Assess railway station', 'area cells → decides', 'action autonomously'])
     steps_slide(prs, 'I1 Query — Step-by-Step Trace', [
         ('1',  'User',         'Types intent-based query into chat.py'),
-        ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3',  'Orchestrator', 'Injects live network snapshot; calls Gemini'),
-        ('4',  'Gemini LLM',   'Tool call 1: query_network() — assess all cells'),
-        ('5',  'Orchestrator', 'GET /network → Controller'),
-        ('6',  'Controller',   'topology.json + InfluxDB KPIs (PRB, SINR, UEs, throughput)'),
-        ('7',  'Controller',   'Returns full network snapshot'),
-        ('8',  'Orchestrator', 'Returns snapshot to Gemini'),
-        ('9',  'Gemini LLM',   'Identifies railway station area cells: MLS_RWS_* (lat≈13.008)'),
-        ('10', 'Gemini LLM',   'Assesses KPIs: high PRB? low SINR? UEs near max?'),
-        ('11', 'Gemini LLM',   'Decides action: move_cell (DU imbalance) or plan_network (capacity)'),
-        ('12', 'Orchestrator', 'Executes chosen tool: move_cell or plan_network'),
-        ('13', 'Controller',   'Updates topology.json or generates capacity plan'),
-        ('14', 'Gemini LLM',   'Generates intent fulfilment summary with expected improvements'),
-        ('15', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends snapshot to SYSTEM_PROMPT; sends to Gemini'),
+        ('4',  'Gemini LLM',   'Tool call 1: query_network()  [while True loop, iteration 1]'),
+        ('5',  'Orchestrator', 'GET /network → Controller; yields *[calling tool: query_network...]* inline'),
+        ('6',  'Controller',   'topology.json + InfluxDB KPIs (PRB, SINR, UEs, throughput); returns 30-cell snapshot'),
+        ('7',  'Orchestrator', 'JSON-sanitises; appends FunctionResponse to session history; re-calls Gemini [iteration 2]'),
+        ('8',  'Gemini LLM',   'Identifies railway station area cells: MLS_RWS_* (lat≈13.008)'),
+        ('9',  'Gemini LLM',   'Assesses KPIs: high PRB? low SINR? UEs near max?'),
+        ('10', 'Gemini LLM',   'Autonomously decides: move_cell (DU imbalance) or plan_network (capacity gap)'),
+        ('11', 'Orchestrator', 'Executes chosen tool; yields *[calling tool...]* inline; updates topology or plan'),
+        ('12', 'Orchestrator', 'JSON-sanitises result; appends to history; re-calls Gemini → loop exits'),
+        ('13', 'Gemini LLM',   'Generates intent fulfilment summary with expected UX improvements'),
+        ('14', 'Orchestrator', 'Streams text/plain chunks via sync generator (StreamingResponse)'),
     ])
     prs.save(os.path.join(OUT, 'I1_Query_Flow.pptx'))
     print('Saved I1_Query_Flow.pptx')
@@ -539,17 +533,17 @@ def make_i2():
         ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
         ('3',  'Orchestrator', 'Injects live network snapshot; calls Gemini'),
         ('4',  'Gemini LLM',   'Tool call 1: get_alerts(alert_type="SINR_LOW")'),
-        ('5',  'Orchestrator', 'GET /alerts?alert_type=SINR_LOW on Controller'),
-        ('6',  'Controller',   'Queries InfluxDB alerts: SINR_LOW records'),
-        ('7',  'Orchestrator', 'Returns SINR_LOW alert list to Gemini'),
-        ('8',  'Gemini LLM',   'Tool call 2: query_network() — get sinr_db + cell locations'),
-        ('9',  'Orchestrator', 'GET /network → Controller → topology.json + InfluxDB'),
-        ('10', 'Orchestrator', 'Returns full network snapshot to Gemini'),
+        ('5',  'Orchestrator', 'Direct Flux query on InfluxDB: SINR_LOW alerts; yields *[calling tool: get_alerts...]* inline'),
+        ('6',  'InfluxDB',     'Returns SINR_LOW records with cell_id, severity, confidence'),
+        ('7',  'Orchestrator', 'JSON-sanitises; appends FunctionResponse to session history; re-calls Gemini [iteration 2]'),
+        ('8',  'Gemini LLM',   'Tool call 2: query_network() — confirm sinr_db values + cell locations'),
+        ('9',  'Orchestrator', 'GET /network → Controller; yields *[calling tool: query_network...]* inline'),
+        ('10', 'Orchestrator', 'JSON-sanitises; appends FunctionResponse; re-calls Gemini [iteration 3]'),
         ('11', 'Gemini LLM',   'Filters southern cells (lat < 13.000): MGR, CHD, 6CR, SPG'),
         ('12', 'Gemini LLM',   'Cross-checks SINR_LOW alerts with live sinr_db values'),
         ('13', 'Gemini LLM',   'Tool call 3: move_cell(cell_id=X, target_du_id=Y)'),
-        ('14', 'Controller',   'Atomically updates topology.json'),
-        ('15', 'Gemini LLM',   'Generates: SINR diagnosis, cells moved, expected improvement'),
+        ('14', 'Controller',   'Atomically updates topology.json (.tmp → rename); DU simulators reload in 5 s'),
+        ('15', 'Orchestrator', 'JSON-sanitises; appends to history; re-calls Gemini → loop exits; streams reply'),
     ])
     prs.save(os.path.join(OUT, 'I2_Query_Flow.pptx'))
     print('Saved I2_Query_Flow.pptx')
@@ -567,15 +561,16 @@ def make_e1():
     no_tool_slide(prs, 'E1 Query Flow — Action Summary (No Tool)',
         ['Reads all tool call', 'records from history', '→ ordered action list'])
     steps_slide(prs, 'E1 Query — Step-by-Step Trace', [
-        ('1', 'User',         'Types explainability query into chat.py'),
-        ('2', 'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3', 'Orchestrator', 'Injects full conversation history (all tool calls + results)'),
-        ('4', 'Gemini LLM',   'No tool call — reads action history from conversation context'),
-        ('5', 'Gemini LLM',   'Extracts: which tools called, with what args, and outcomes'),
-        ('6', 'Gemini LLM',   'Reconstructs: alerts detected → cells moved → topology updated'),
-        ('7', 'Gemini LLM',   'Generates ordered action summary with before/after metrics'),
-        ('8', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-        ('9', 'chat.py',      'Prints action summary to user'),
+        ('1',  'User',         'Types explainability query into chat.py'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag for named sessions)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network on Controller; appends live cell snapshot to SYSTEM_PROMPT'),
+        ('4',  'Orchestrator', 'Sends SYSTEM_PROMPT (static) + live snapshot (dynamic) + session history (types.Content) to Gemini'),
+        ('5',  'Gemini LLM',   'No tool call — reads all prior tool call records + results from session history (types.Content list)'),
+        ('6',  'Gemini LLM',   'Extracts: which tools called, with what args, and outcomes'),
+        ('7',  'Gemini LLM',   'Reconstructs: alerts detected → cells moved → topology updated'),
+        ('8',  'Gemini LLM',   'Generates ordered action summary with before/after metrics; loop exits (no tool calls)'),
+        ('9',  'Orchestrator', 'Streams text/plain chunks via sync generator (Starlette thread pool → StreamingResponse)'),
+        ('10', 'chat.py',      'Prints streamed action summary to operator terminal'),
     ])
     prs.save(os.path.join(OUT, 'E1_Query_Flow.pptx'))
     print('Saved E1_Query_Flow.pptx')
@@ -593,15 +588,16 @@ def make_e2():
     no_tool_slide(prs, 'E2 Query Flow — Move Decision Explanation (No Tool)',
         ['Reads move_cell context:', 'alert + DU loads at time', '→ causal explanation'])
     steps_slide(prs, 'E2 Query — Step-by-Step Trace', [
-        ('1', 'User',         'Types explainability query into chat.py'),
-        ('2', 'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-        ('3', 'Orchestrator', 'Injects conversation history including move_cell + alert context'),
-        ('4', 'Gemini LLM',   'No tool call — reconstructs decision from context'),
-        ('5', 'Gemini LLM',   'Identifies: which cell, source DU, target DU, triggering alert'),
-        ('6', 'Gemini LLM',   'Recalls DU load comparison at time of decision'),
-        ('7', 'Gemini LLM',   'Generates causal explanation: overload alert → DU ranking → move'),
-        ('8', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-        ('9', 'chat.py',      'Prints explanation to user'),
+        ('1',  'User',         'Types explainability query into chat.py'),
+        ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag for named sessions)'),
+        ('3',  'Orchestrator', 'Calls build_network_context() → GET /network on Controller; appends live cell snapshot to SYSTEM_PROMPT'),
+        ('4',  'Orchestrator', 'Sends SYSTEM_PROMPT (static) + live snapshot (dynamic) + session history (types.Content) to Gemini'),
+        ('5',  'Gemini LLM',   'No tool call — reconstructs decision from move_cell record in session history (types.Content list)'),
+        ('6',  'Gemini LLM',   'Identifies: which cell, source DU, target DU, triggering alert'),
+        ('7',  'Gemini LLM',   'Recalls DU load comparison at time of decision'),
+        ('8',  'Gemini LLM',   'Generates causal explanation: overload alert → DU ranking → move; loop exits'),
+        ('9',  'Orchestrator', 'Streams text/plain chunks via sync generator (Starlette thread pool → StreamingResponse)'),
+        ('10', 'chat.py',      'Prints streamed explanation to operator terminal'),
     ])
     prs.save(os.path.join(OUT, 'E2_Query_Flow.pptx'))
     print('Saved E2_Query_Flow.pptx')

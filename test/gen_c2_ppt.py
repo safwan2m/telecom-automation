@@ -148,7 +148,7 @@ lbl(s2, 2.6, 1.2, 0.7, 0.35, 'HTTP\nPOST', fsize=7, fc=BLUE)
 arrow(s2, 4.25, 2.0,   2.2,  2.95,  color=QARROW)
 lbl(s2, 2.7, 2.35, 1.5, 0.35, 'POST /chat', fsize=7, fc=BLUE)
 arrow(s2, 3.3,  3.1,   4.3,  3.1,   color=QARROW)
-lbl(s2, 3.3, 2.75, 1.05, 0.35, 'prompt +\nsnapshot', fsize=7, fc=BLUE)
+lbl(s2, 3.3, 2.75, 1.05, 0.35, 'SYSTEM_PROMPT\n+ snapshot\n+ history', fsize=7, fc=BLUE)
 arrow(s2, 4.3,  3.55,  3.3,  3.55,  color=RARROW)
 lbl(s2, 3.2, 3.6, 1.15, 0.35, 'fn call:\nquery_cell', fsize=7, fc=GREEN)
 arrow(s2, 2.2,  3.8,   2.2,  4.9,   color=QARROW)
@@ -190,18 +190,19 @@ lbl(s3, 0.3, 0.05, 10.0, 0.8, 'C2 Query — Step-by-Step Trace',
 
 steps = [
     ('1',  'User',         'Types query into chat.py'),
-    ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-    ('3',  'Orchestrator', 'Injects live network snapshot into system prompt; calls Gemini'),
-    ('4',  'Gemini LLM',   'Identifies cell MLS_RWS_01; emits query_cell(cell_id="MLS_RWS_01")'),
-    ('5',  'Orchestrator', 'Dispatches query_cell → GET /cells/MLS_RWS_01 on Controller'),
-    ('6',  'Controller',   'Reads topology.json: PCI=1, band=n78, vendor=Nokia, 64T64R, 3800 Mbps, DU-MLS-1'),
-    ('7',  'Controller',   'Runs Flux query: 30-min series for connected_ues, PRB, SINR, throughput, HO rate, packet loss'),
-    ('8',  'Controller',   'Returns merged full config + 30-min KPI time series for MLS_RWS_01'),
-    ('9',  'Orchestrator', 'Passes tool result (cell detail) back to Gemini'),
-    ('10', 'Gemini LLM',   'Formats all config fields and summarises 30-min KPI trends'),
-    ('11', 'Gemini LLM',   'Generates detailed natural language cell profile for MLS_RWS_01'),
-    ('12', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-    ('13', 'chat.py',      'Prints full cell profile to user'),
+    ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag for named sessions)'),
+    ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends live snapshot to SYSTEM_PROMPT'),
+    ('4',  'Orchestrator', 'Sends SYSTEM_PROMPT + live snapshot + session history (types.Content) to Gemini'),
+    ('5',  'Gemini LLM',   'Identifies cell MLS_RWS_01; emits query_cell(cell_id="MLS_RWS_01")'),
+    ('6',  'Orchestrator', 'Dispatches query_cell → GET /cells/MLS_RWS_01 on Controller; yields *[calling tool...]* inline'),
+    ('7',  'Controller',   'Reads topology.json: PCI=1, band=n78, vendor=Nokia, 64T64R, 3800 Mbps, DU-MLS-1'),
+    ('8',  'Controller',   'Runs Flux query: 30-min series for connected_ues, PRB, SINR, throughput, HO rate, packet loss'),
+    ('9',  'Controller',   'Returns merged full config + 30-min KPI time series for MLS_RWS_01'),
+    ('10', 'Orchestrator', 'JSON-sanitises result (json.dumps default=str); appends FunctionResponse to session history; re-calls Gemini'),
+    ('11', 'Gemini LLM',   'Formats all config fields and summarises 30-min KPI trends; no further tool calls → loop exits'),
+    ('12', 'Gemini LLM',   'Generates detailed NL cell profile for MLS_RWS_01'),
+    ('13', 'Orchestrator', 'Streams text/plain chunks via sync generator (Starlette thread pool → StreamingResponse)'),
+    ('14', 'chat.py',      'Prints streamed full cell profile to operator terminal'),
 ]
 col_colors = {'User': ORANGE, 'chat.py': BLUE, 'Orchestrator': NAVY,
               'Gemini LLM': PURPLE, 'Controller': TEAL}

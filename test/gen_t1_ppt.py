@@ -146,7 +146,7 @@ lbl(s2, 2.6, 1.2, 0.7, 0.35, 'HTTP\nPOST', fsize=7, fc=BLUE)
 arrow(s2, 4.25, 2.0,   2.2,  2.95,  color=QARROW)
 lbl(s2, 2.7, 2.35, 1.5, 0.35, 'POST /chat', fsize=7, fc=BLUE)
 arrow(s2, 3.3,  3.1,   4.3,  3.1,   color=QARROW)
-lbl(s2, 3.3, 2.75, 1.05, 0.35, 'prompt +\nsnapshot', fsize=7, fc=BLUE)
+lbl(s2, 3.3, 2.75, 1.05, 0.35, 'SYSTEM_PROMPT\n+ snapshot\n+ history', fsize=7, fc=BLUE)
 arrow(s2, 4.3,  3.55,  3.3,  3.55,  color=RARROW)
 lbl(s2, 3.25, 3.6, 1.1, 0.35, 'fn call:\nquery_network', fsize=7, fc=GREEN)
 arrow(s2, 2.2,  3.8,   2.2,  4.9,   color=QARROW)
@@ -188,18 +188,19 @@ lbl(s3, 0.3, 0.05, 10.0, 0.8, 'T1 Query — Step-by-Step Trace',
 
 steps = [
     ('1',  'User',         'Types query into chat.py'),
-    ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
-    ('3',  'Orchestrator', 'Injects live network snapshot into system prompt; calls Gemini'),
-    ('4',  'Gemini LLM',   'Decides query_network is the right tool; emits function call'),
-    ('5',  'Orchestrator', 'Dispatches query_network → GET /network on Controller'),
-    ('6',  'Controller',   'Reads topology.json: full cus{}, dus{}, cells{} structure'),
-    ('7',  'Controller',   'Runs Flux query against InfluxDB: latest KPIs per cell'),
-    ('8',  'Controller',   'Returns merged topology object with cus, dus, cells and KPIs'),
-    ('9',  'Orchestrator', 'Passes full topology tool result to Gemini'),
-    ('10', 'Gemini LLM',   'Walks the CU → DU → cell tree; formats it as a readable hierarchy'),
-    ('11', 'Gemini LLM',   'Generates reply: CU-MLS → DU-MLS-1/2/3 → 30 cells with config'),
-    ('12', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
-    ('13', 'chat.py',      'Prints topology to user'),
+    ('2',  'chat.py',      'HTTP POST {session_id, message} → Orchestrator /chat  (pure stdlib urllib; --session flag for named sessions)'),
+    ('3',  'Orchestrator', 'Calls build_network_context() → GET /network; appends live snapshot to SYSTEM_PROMPT'),
+    ('4',  'Orchestrator', 'Sends SYSTEM_PROMPT + live snapshot + session history (types.Content) to Gemini'),
+    ('5',  'Gemini LLM',   'Decides query_network is the right tool; emits function call: query_network()'),
+    ('6',  'Orchestrator', 'Dispatches query_network → GET /network on Controller; yields *[calling tool...]* inline'),
+    ('7',  'Controller',   'Reads topology.json: full cus{}, dus{}, cells{} structure'),
+    ('8',  'Controller',   'Runs Flux query against InfluxDB: latest KPIs per cell'),
+    ('9',  'Controller',   'Returns merged topology object with cus, dus, cells and KPIs'),
+    ('10', 'Orchestrator', 'JSON-sanitises result (json.dumps default=str); appends FunctionResponse to session history; re-calls Gemini'),
+    ('11', 'Gemini LLM',   'Walks CU → DU → cell tree; formats hierarchy; no further tool calls → loop exits'),
+    ('12', 'Gemini LLM',   'Generates reply: CU-MLS → DU-MLS-1/2/3 → 30 cells with band and config'),
+    ('13', 'Orchestrator', 'Streams text/plain chunks via sync generator (Starlette thread pool → StreamingResponse)'),
+    ('14', 'chat.py',      'Prints streamed topology to operator terminal'),
 ]
 col_colors = {'User': ORANGE, 'chat.py': BLUE, 'Orchestrator': NAVY,
               'Gemini LLM': PURPLE, 'Controller': TEAL}
