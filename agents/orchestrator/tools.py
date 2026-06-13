@@ -142,6 +142,132 @@ def apply_plan(plan_id: str) -> dict:
     return _plan("/plan/apply", "POST", {"plan_id": plan_id})
 
 
+def query_ue(ue_id: str = "", cell_id: str = "", last_minutes: int = 30) -> list:
+    """
+    Query per-UE usage and mobility events from InfluxDB.
+    Filter by ue_id or cell_id; returns both ue_usage and ue_mobility records.
+    """
+    ue_filter   = f'|> filter(fn: (r) => r.ue_id == "{ue_id}")' if ue_id else ""
+    cell_filter = f'|> filter(fn: (r) => r.cell_id == "{cell_id}")' if cell_id else ""
+    flux_usage  = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -{last_minutes}m)
+  |> filter(fn: (r) => r._measurement == "ue_usage")
+  {ue_filter}{cell_filter}
+  |> filter(fn: (r) => r._field == "dl_bytes" or r._field == "ul_bytes"
+                    or r._field == "latency_ms" or r._field == "jitter_ms"
+                    or r._field == "packet_loss")
+  |> last()
+  |> limit(n: 50)
+"""
+    flux_mob = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -{last_minutes}m)
+  |> filter(fn: (r) => r._measurement == "ue_mobility")
+  {ue_filter}
+  |> filter(fn: (r) => r._field == "ho_duration_ms" or r._field == "rsrp_source"
+                    or r._field == "rsrp_target" or r._field == "velocity_kmh")
+  |> last()
+  |> limit(n: 20)
+"""
+    usage    = _influx_query(flux_usage)
+    mobility = _influx_query(flux_mob)
+    return {"usage_records": usage, "mobility_events": mobility}
+
+
+def get_son_status(last_minutes: int = 60) -> dict:
+    """
+    Return a summary of recent SON (Self-Organizing Network) actions.
+    Includes action counts by type, latest 10 actions, and alert severity breakdown.
+    """
+    flux_actions = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -{last_minutes}m)
+  |> filter(fn: (r) => r._measurement == "son_actions")
+  |> filter(fn: (r) => r._field == "message")
+  |> sort(columns: ["_time"], desc: true)
+  |> limit(n: 20)
+"""
+    flux_alerts = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -{last_minutes}m)
+  |> filter(fn: (r) => r._measurement == "alerts")
+  |> filter(fn: (r) => r._field == "message")
+  |> sort(columns: ["_time"], desc: true)
+  |> limit(n: 50)
+"""
+    actions = _influx_query(flux_actions)
+    alerts  = _influx_query(flux_alerts)
+
+    action_types: dict[str, int] = {}
+    for a in actions:
+        t = a.get("action_type", "UNKNOWN")
+        action_types[t] = action_types.get(t, 0) + 1
+
+    alert_sev: dict[str, int] = {}
+    for a in alerts:
+        s = a.get("severity", "UNKNOWN")
+        alert_sev[s] = alert_sev.get(s, 0) + 1
+
+    return {
+        "window_minutes":    last_minutes,
+        "total_son_actions": len(actions),
+        "action_type_counts": action_types,
+        "total_alerts":      len(alerts),
+        "alert_severity_counts": alert_sev,
+        "recent_actions":    actions[:10],
+    }
+
+
+def add_cell(
+    cell_id: str,
+    du_id: str,
+    area: str,
+    lat: float,
+    lon: float,
+    generation: str = "5G",
+    band: str = "n78",
+    vendor: str = "Nokia",
+    max_ues: int = 900,
+    tx_power_w: int = 1000,
+) -> dict:
+    """
+    Add a new cell to the live network topology.
+    PCI is auto-assigned if not specified.
+    The DU simulator picks up the new cell within TOPO_POLL_SEC (default 5 s).
+    """
+    hw_defaults = {
+        "Nokia":    {"hardware_model": "AirScale MAA 64T64R", "antenna_config": "64T64R", "peak_dl_mbps": 3800, "idle_power_w": 250, "freq_mhz": 3500},
+        "Ericsson": {"hardware_model": "AIR 6449",            "antenna_config": "64T64R", "peak_dl_mbps": 3600, "idle_power_w": 240, "freq_mhz": 3500},
+        "Samsung":  {"hardware_model": "TM500 64T64R",        "antenna_config": "64T64R", "peak_dl_mbps": 3400, "idle_power_w": 225, "freq_mhz": 3500},
+        "ZTE":      {"hardware_model": "AAU 5614",             "antenna_config": "64T64R", "peak_dl_mbps": 3200, "idle_power_w": 250, "freq_mhz": 3500},
+    }
+    hw = hw_defaults.get(vendor, hw_defaults["Nokia"])
+    body = {
+        "cell_id": cell_id, "du_id": du_id, "area": area,
+        "lat": lat, "lon": lon,
+        "generation": generation, "band": band,
+        "freq_mhz": hw["freq_mhz"], "pci": 0,
+        "vendor": vendor, "hardware_model": hw["hardware_model"],
+        "antenna_config": hw["antenna_config"],
+        "peak_dl_mbps": hw["peak_dl_mbps"],
+        "tx_power_w": tx_power_w, "idle_power_w": hw["idle_power_w"],
+        "max_ues": max_ues,
+    }
+    return _ctrl("/cells/add", "POST", body)
+
+
+def remove_cell(cell_id: str) -> dict:
+    """Remove a cell from the live network topology."""
+    url = f"{CONTROLLER_URL}/cells/{cell_id}"
+    try:
+        r = __import__("httpx").delete(url, timeout=8.0)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def get_alerts(severity: str = "", last_minutes: int = 60) -> list:
     """
     Retrieve recent KPI alerts from InfluxDB.
@@ -270,6 +396,61 @@ TOOL_SCHEMAS = [
             "required": [],
         },
     },
+    {
+        "name": "query_ue",
+        "description": "Query per-UE usage (DL/UL bytes, latency, jitter, packet loss) and mobility events (handovers, velocity, RSRP) from InfluxDB. Filter by ue_id or cell_id.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ue_id":        {"type": "string", "description": "Specific UE ID e.g. 'UE-MLS_RWS_01-0023'"},
+                "cell_id":      {"type": "string", "description": "Filter all UEs on a cell e.g. 'MLS_RWS_01'"},
+                "last_minutes": {"type": "integer", "default": 30},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_son_status",
+        "description": "Return a summary of recent SON (Self-Organizing Network) autonomous actions: load balancing moves, PCI re-optimisation requests, DTX recommendations, traffic steering. Shows action counts and the latest 10 actions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "last_minutes": {"type": "integer", "default": 60},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "add_cell",
+        "description": "Add a new cell to the live network topology. The DU simulator picks it up within 5 seconds. PCI is auto-assigned. Use this for conversational cell deployment.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cell_id":    {"type": "string", "description": "Unique cell ID e.g. 'MLS_NEW_01'"},
+                "du_id":      {"type": "string", "description": "Target DU e.g. 'DU-MLS-1'"},
+                "area":       {"type": "string", "description": "Area name e.g. 'Malleswaram'"},
+                "lat":        {"type": "number", "description": "Latitude"},
+                "lon":        {"type": "number", "description": "Longitude"},
+                "generation": {"type": "string", "enum": ["5G", "4G"], "default": "5G"},
+                "band":       {"type": "string", "description": "Radio band e.g. 'n78'", "default": "n78"},
+                "vendor":     {"type": "string", "enum": ["Nokia", "Ericsson", "Samsung", "ZTE"], "default": "Nokia"},
+                "max_ues":    {"type": "integer", "default": 900},
+                "tx_power_w": {"type": "integer", "default": 1000},
+            },
+            "required": ["cell_id", "du_id", "area", "lat", "lon"],
+        },
+    },
+    {
+        "name": "remove_cell",
+        "description": "Remove a cell from the live network topology. The DU simulator deregisters it within 5 seconds.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cell_id": {"type": "string", "description": "Cell to remove e.g. 'MLS_RWS_01'"},
+            },
+            "required": ["cell_id"],
+        },
+    },
 ]
 
 # Map tool name → function
@@ -283,4 +464,8 @@ TOOL_MAP = {
     "plan_network_multi_period": lambda args: plan_network_multi_period(**args),
     "apply_plan":                lambda args: apply_plan(**args),
     "get_alerts":                lambda args: get_alerts(**args),
+    "query_ue":                  lambda args: query_ue(**args),
+    "get_son_status":            lambda args: get_son_status(**args),
+    "add_cell":                  lambda args: add_cell(**args),
+    "remove_cell":               lambda args: remove_cell(**args),
 }
