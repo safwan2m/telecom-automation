@@ -115,10 +115,146 @@ The KPI agent, controller, or planning engine can reorganise cells at any time i
 ## Agent Architecture
 
 ### Agent 1 — LLM Orchestrator (`agents/orchestrator/`)
-- FastAPI on port 8082
-- `POST /chat` — natural language → Gemini tool-calling → streaming response
-- Tools: `query_network`, `list_cells`, `query_cell`, `move_cell`, `move_du`, `plan_network`, `plan_network_multi_period`, `apply_plan`, `get_alerts`
-- Injects live network snapshot from Controller into every system prompt
+
+FastAPI service on port 8082 powered by **Gemini 2.5 Flash** via the `google-genai` SDK. Accepts natural-language operator commands over HTTP, drives a multi-step tool-calling loop, and streams the response back in real time.
+
+#### Request / Response flow
+
+```
+User message  (POST /chat)
+      │
+      ├─► build_network_context()  ──GET /network──► Controller
+      │         (live cell snapshot appended to system prompt)
+      │
+      ▼
+SYSTEM_PROMPT + live snapshot + session history
+      │
+      ▼
+  ┌──────────────────────────────────────────────┐
+  │  Gemini 2.5 Flash  (non-streaming API call)  │
+  └──────────────────────────────────────────────┘
+      │
+      ├── text parts → yield to caller (streaming)
+      │
+      └── function_call parts → tool-calling loop:
+              ├─ yield "*[calling tool: name...]*"
+              ├─ execute_tool(name, args)  (Python call)
+              ├─ append FunctionResponse to history
+              └─ call Gemini again  →  repeat until no tool calls
+```
+
+#### System prompt
+
+Two-part prompt injected on every request:
+
+- **Static** (`SYSTEM_PROMPT`): 30-cell network overview — site naming convention (`MLS_<SITE>_<SECTOR>`), DU/CU hierarchy, per-band UE limits and power specs, operator guidelines (confirm before destructive actions, flag overloads, bullet summaries)
+- **Dynamic** (`build_network_context()`): calls `GET /network` on the Controller and formats every cell as one line — `cell_id (area) → DU=... | UEs=... | PRB=...% | SINR=...dB | Power=...W`. Appended to the static prompt on every request so the LLM always sees current live state. Returns a warning message if the Controller is unreachable.
+
+#### Tool-calling loop
+
+Each `/chat` request runs a `while True` loop until Gemini returns no function calls:
+
+1. `gemini.models.generate_content(model, contents=history, config)` — synchronous, non-streaming
+2. `model_content` (the full assistant turn) is appended to session history
+3. Any text parts are yielded immediately to the streaming caller
+4. For each `function_call` in the response:
+   - Yield `\n\n*[calling tool: name...]*\n` (visible in the chat UI)
+   - Call `T.TOOL_MAP[name](args)` — synchronous Python, hits Controller / Planning API / InfluxDB over HTTP
+   - JSON-sanitise the result (`json.dumps(result, default=str)`) so proto Struct accepts it
+   - Append a `FunctionResponse` part to a new `user` turn in history
+5. Go to step 1 with the updated history. Break when the response contains no function calls.
+
+Multiple tools can be called per response (Gemini may batch them); all are executed and their results fed back in a single user turn before the next model call.
+
+#### Tool schema translation
+
+`tools.py` stores all 9 tool schemas in **Anthropic-style JSON** (`name`, `description`, `input_schema` with JSON Schema `properties`). At startup, `orchestrator.py` translates these to Gemini's `function_declarations` format via `_clean_params()`, which:
+- Strips `default` fields — Gemini rejects them in parameter schemas
+- Removes empty `enum` arrays — Gemini rejects them (arises from the `""` sentinel in `severity` enum)
+- Uses `copy.deepcopy` to avoid mutating the original `TOOL_SCHEMAS` used elsewhere
+
+The `GEMINI_TOOLS` list has the structure `[{"function_declarations": [...]}]` as required by the Gemini API.
+
+#### Tool inventory
+
+| Tool | HTTP call | Purpose |
+|---|---|---|
+| `query_network` | `GET /network` on Controller | Full topology + live KPIs for all 30 cells |
+| `list_cells` | `GET /cells?area=&du_id=&cu_id=` | Filtered cell list with KPIs |
+| `query_cell` | `GET /cells/{id}` | Single cell config + 30-min KPI time series |
+| `move_cell` | `POST /move/cell` | Reassign a cell to a different DU |
+| `move_du` | `POST /move/du` | Reassign a DU to a different CU |
+| `plan_network` | `POST /plan` | Heuristic or MIP-optimal placement + PCI + slice planning |
+| `plan_network_multi_period` | `POST /plan/multi-period` | Multi-period MIP (Case A phased rollout / Case B diurnal shift) |
+| `apply_plan` | `POST /plan/apply` | Push accepted plan to Controller as live topology |
+| `get_alerts` | InfluxDB Flux query (direct) | Recent KPI anomaly alerts tagged by severity and type |
+
+#### Session management
+
+- In-memory `_sessions: dict[str, list[types.Content]]` — one entry per `session_id`
+- Each session stores the full conversation as `types.Content` objects (Gemini's native format preserving role, text, and function call/response parts)
+- Multiple sessions coexist independently (e.g. `default`, `ops-team`, `map-abc1234`)
+- `DELETE /history` clears a session; sessions are lost on container restart (no persistence)
+- `GET /history` normalises the internal `types.Content` list into plain `{"role", "content"}` dicts for external consumers (tool calls shown as `[Calling name]`, results as `[Tool result: name]`)
+
+#### Streaming
+
+`POST /chat` returns a FastAPI `StreamingResponse` wrapping a **synchronous generator** (`chat_turn`). Starlette runs sync generators in a thread pool, so the blocking Gemini API call and tool HTTP calls do not stall the asyncio event loop. The caller receives plain `text/plain` chunks:
+
+- LLM text — one chunk per Gemini response turn (not token-by-token; Gemini's non-streaming API returns the full turn at once)
+- `\n\n*[calling tool: name...]*\n` — emitted before each tool execution
+- `\n\n[Error] ...` — on quota exhaustion (`429`), rate limit, or API failure
+- Quota/rate-limit errors are detected by checking for `"429"`, `"quota"`, or `"ResourceExhausted"` in the exception message
+
+#### Configuration
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `GOOGLE_API_KEY` | required | Gemini API authentication |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model name passed to `generate_content` |
+| `CONTROLLER_URL` | `http://controller:8080` | Context injection + move_cell / move_du tools |
+| `PLANNING_URL` | `http://planning-api:8081` | plan_network / apply_plan tools |
+| `INFLUX_URL` | `http://influxdb:8086` | get_alerts tool (direct InfluxDB Flux query) |
+| `INFLUX_TOKEN` / `INFLUX_ORG` / `INFLUX_BUCKET` | — | InfluxDB authentication for get_alerts |
+
+---
+
+### chat.py — Operator CLI Client
+
+`chat.py` (project root) is a standalone terminal REPL that connects to the orchestrator's REST API. It contains no LLM logic — it is a pure UI layer that formats requests and prints responses.
+
+#### Usage
+
+```bash
+py chat.py                                    # default: localhost:8082, session "default"
+py chat.py --url http://remote-host:8082      # remote orchestrator
+py chat.py --session ops-team                 # named session (isolated history)
+```
+
+On startup it calls `GET /health` and prints a banner showing the active model name and orchestrator URL. If the orchestrator is unreachable, it prints a warning but continues (useful when starting before `docker compose up` is finished).
+
+#### Built-in commands
+
+| Command | Action |
+|---|---|
+| `/status` | Expands → *"What is the current status of all cells, DUs, and CUs? Summarise in a table."* |
+| `/alerts` | Expands → *"Show me all recent KPI alerts from the last 60 minutes."* |
+| `/cells` | Expands → *"List all cells with their current connected UEs, PRB utilisation, and DU assignment."* |
+| `/plan` | Expands → *"Generate a network plan for Malleswaram with default parameters and show me a summary."* |
+| `/history` | `GET /history?session_id=...` — prints past turns (role + first 200 chars) |
+| `/clear` | `DELETE /history?session_id=...` — resets server-side conversation |
+| `/tools` | `GET /tools` — lists all 9 available agent tools with short descriptions |
+| `quit` / `exit` / `q` | Exits the CLI |
+
+Any other input is sent as-is to `POST /chat` with the current `session_id`.
+
+#### Transport
+
+Pure Python stdlib (`urllib.request`, `urllib.error`) — no external dependencies beyond the standard library. The `/chat` call is **synchronous** (blocks until the server closes the response body), so the full response appears at once rather than token-by-token. For live streaming output, use the map server's built-in chat panel (which uses the browser Fetch API with `ReadableStream`).
+
+#### Session semantics
+
+`--session` sets the `session_id` field in every request. Multiple operators can run separate `chat.py` instances with different `--session` names against the same orchestrator without sharing context or history. The map server's integrated chat panel uses a randomised session ID (`map-xxxxxxx`) per page load to avoid cross-contamination with CLI sessions.
 
 ### Agent 2 — Controller (`agents/controller/`)
 - FastAPI on port 8080 — single control plane / source of truth
@@ -279,10 +415,12 @@ Subject to:
 - [ ] Reinforcement learning-based power optimizer (future sprint)
 
 ### Phase 5 — Orchestrator Agent ✅ COMPLETE
-- [x] LLM chat interface (FastAPI POST /chat, streaming)
-- [x] Tool-calling: query_network, list_cells, query_cell, move_cell, move_du, plan_network, plan_network_multi_period, apply_plan, get_alerts
-- [x] Context injection: live network state prepended to every system prompt
-- [x] Conversation history (per-session, in-memory)
+- [x] LLM chat interface (FastAPI POST /chat, streaming via sync generator + StreamingResponse)
+- [x] Tool-calling loop: multi-step while loop; all 9 tools wired; tool results JSON-sanitised before re-injection
+- [x] Anthropic→Gemini tool schema translation at startup (`_clean_params` strips `default` and empty `enum`)
+- [x] Context injection: `build_network_context()` polls Controller `/network` on every request
+- [x] Conversation history: per-session in-memory `_sessions` dict of `types.Content` lists
+- [x] `chat.py` CLI client: terminal REPL with `/status`, `/alerts`, `/cells`, `/plan`, `/history`, `/clear`, `/tools` shortcuts; named sessions via `--session`; no external dependencies
 - [ ] End-to-end integration test suite
 
 ### Phase 6 — Map Visualization ✅ COMPLETE
@@ -341,11 +479,27 @@ GET  /health
 ## Orchestrator API Reference
 
 ```
-POST /chat        {"message":"...", "session_id":"..."}  → streaming text
+POST /chat
+  Body:    {"message": "...", "session_id": "default"}
+  Returns: text/plain streaming
+  Notes:   Tool-call markers embedded inline as *[calling tool: name...]*
+           One chunk per Gemini turn (full turn, not token-by-token).
+           Responds with \n\n[Error] prefix on quota exhaustion or API failures.
+           Session history is maintained server-side per session_id.
+
 GET  /history?session_id=default
+  Returns: JSON array of {"role": "user"|"assistant", "content": "..."}
+  Notes:   Tool calls shown as "[Calling name]", results as "[Tool result: name]"
+           History is in-memory only; lost on container restart.
+
 DELETE /history?session_id=default
+  Returns: {"status": "cleared", "session_id": "..."}
+
 GET  /tools
+  Returns: [{"name": "...", "description": "..."}]  (9 tools)
+
 GET  /health
+  Returns: {"status": "ok", "model": "gemini-2.5-flash"}
 ```
 
 ## Map Server API Reference
