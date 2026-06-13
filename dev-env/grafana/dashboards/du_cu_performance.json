@@ -1,0 +1,102 @@
+{
+  "uid": "telecom-du-cu",
+  "title": "DU / CU Performance",
+  "tags": ["telecom", "du", "cu", "infrastructure"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "DU CPU Utilization (%)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":70},{"color":"red","value":85}] },
+          "color": { "mode": "palette-classic" } }
+      },
+      "targets": [{
+        "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+        "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"du_kpi\" and r._field == \"cpu_pct\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> group(columns: [\"du_id\"])\n  |> yield(name: \"du_cpu\")"
+      }]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "DU Memory Utilization (%)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":75},{"color":"red","value":90}] } }
+      },
+      "targets": [{
+        "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+        "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"du_kpi\" and r._field == \"memory_pct\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> group(columns: [\"du_id\"])\n  |> yield(name: \"du_mem\")"
+      }]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Fronthaul Latency per DU (µs)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "µs",
+          "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":150},{"color":"red","value":200}] } }
+      },
+      "targets": [{
+        "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+        "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"du_kpi\" and r._field == \"fronthaul_latency_us\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> group(columns: [\"du_id\"])\n  |> yield(name: \"fh_lat\")"
+      }]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "F1 Messages per Second per DU",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" } } },
+      "targets": [{
+        "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+        "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"du_kpi\" and r._field == \"f1_msg_per_sec\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> group(columns: [\"du_id\"])\n  |> yield(name: \"f1_msg\")"
+      }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Active UEs per DU",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } } },
+      "targets": [{
+        "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+        "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"du_kpi\" and r._field == \"active_ues\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> group(columns: [\"du_id\"])\n  |> yield(name: \"du_ues\")"
+      }]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "CU PDCP Throughput (Gbps) DL + UL",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "gbps", "color": { "mode": "palette-classic" } } },
+      "targets": [
+        {
+          "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+          "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cu_kpi\" and r._field == \"pdcp_dl_gbps\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> yield(name: \"pdcp_dl\")"
+        },
+        {
+          "refId": "B", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+          "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cu_kpi\" and r._field == \"pdcp_ul_gbps\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> yield(name: \"pdcp_ul\")"
+        }
+      ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Core Registered UEs (AMF)",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [{
+        "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+        "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"core_kpi\" and r._field == \"registered_ues\")\n  |> aggregateWindow(every: 30s, fn: mean)\n  |> yield(name: \"core_ues\")"
+      }]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Core Throughput (Gbps) — UPF",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "gbps" } },
+      "targets": [{
+        "refId": "A", "datasource": { "type": "influxdb", "uid": "${datasource}" },
+        "query": "from(bucket: \"telecom_metrics\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"core_kpi\" and r._field == \"throughput_gbps\")\n  |> aggregateWindow(every: 30s, fn: sum)\n  |> yield(name: \"upf_tput\")"
+      }]
+    }
+  ],
+  "templating": {
+    "list": [{ "type": "datasource", "name": "datasource", "label": "Data Source", "query": "influxdb" }]
+  }
+}

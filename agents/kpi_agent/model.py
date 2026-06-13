@@ -1,7 +1,7 @@
 """
 LSTM-based KPI classifier for 5G cell anomaly detection.
 
-Input : sequence of 6 KPI readings per cell  (shape: batch × SEQ_LEN × N_FEATURES)
+Input : sequence of 9 KPI readings per cell  (shape: batch × SEQ_LEN × N_FEATURES)
 Output: one of 5 cell-state classes
 
 Classes
@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 
 SEQ_LEN    = 6     # timesteps of history fed to the model  (6 × 10 s = 60 s)
-N_FEATURES = 6     # features extracted per timestep
+N_FEATURES = 9     # features extracted per timestep
 N_CLASSES  = 5
 
 LABELS = {
@@ -37,6 +37,9 @@ FEATURE_NORM: list[tuple[float, float]] = [
     (0.0,   1200.0),   # power_w             → 0–1200 W (5G 64T64R full load)
     (0.0,   5.0),      # packet_loss_pct     → 0–5 %
     (0.0,   4000.0),   # dl_throughput_mbps  → 0–4000 Mbps (5G NR peak)
+    (0.0,   15.0),     # cqi                 → 0–15 (3GPP CQI table)
+    (0.0,   30.0),     # bler_pct            → 0–30 % (target <10 %)
+    (0.0,   500.0),    # latency_ms          → 0–500 ms cell latency
 ]
 
 

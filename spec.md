@@ -168,7 +168,7 @@ Multiple tools can be called per response (Gemini may batch them); all are execu
 
 #### Tool schema translation
 
-`tools.py` stores all 9 tool schemas in **Anthropic-style JSON** (`name`, `description`, `input_schema` with JSON Schema `properties`). At startup, `orchestrator.py` translates these to Gemini's `function_declarations` format via `_clean_params()`, which:
+`tools.py` stores all 13 tool schemas in **Anthropic-style JSON** (`name`, `description`, `input_schema` with JSON Schema `properties`). At startup, `orchestrator.py` translates these to Gemini's `function_declarations` format via `_clean_params()`, which:
 - Strips `default` fields — Gemini rejects them in parameter schemas
 - Removes empty `enum` arrays — Gemini rejects them (arises from the `""` sentinel in `severity` enum)
 - Uses `copy.deepcopy` to avoid mutating the original `TOOL_SCHEMAS` used elsewhere
@@ -188,6 +188,10 @@ The `GEMINI_TOOLS` list has the structure `[{"function_declarations": [...]}]` a
 | `plan_network_multi_period` | `POST /plan/multi-period` | Multi-period MIP (Case A phased rollout / Case B diurnal shift) |
 | `apply_plan` | `POST /plan/apply` | Push accepted plan to Controller as live topology |
 | `get_alerts` | InfluxDB Flux query (direct) | Recent KPI anomaly alerts tagged by severity and type |
+| `query_ue` | InfluxDB Flux query (direct) | UE-level usage and mobility data (filter by ue_id or cell_id) |
+| `get_son_status` | InfluxDB Flux query (direct) | SON action summary + counts by type, last 10 actions, active alert severity |
+| `add_cell` | `POST /cells/add` on Controller | Deploy a new cell via chat; auto-assigns PCI if not provided |
+| `remove_cell` | `DELETE /cells/{id}` on Controller | Decommission a cell and remove from DU assignment |
 
 #### Session management
 
@@ -243,7 +247,7 @@ On startup it calls `GET /health` and prints a banner showing the active model n
 | `/plan` | Expands → *"Generate a network plan for Malleswaram with default parameters and show me a summary."* |
 | `/history` | `GET /history?session_id=...` — prints past turns (role + first 200 chars) |
 | `/clear` | `DELETE /history?session_id=...` — resets server-side conversation |
-| `/tools` | `GET /tools` — lists all 9 available agent tools with short descriptions |
+| `/tools` | `GET /tools` — lists all 13 available agent tools with short descriptions |
 | `quit` / `exit` / `q` | Exits the CLI |
 
 Any other input is sent as-is to `POST /chat` with the current `session_id`.
@@ -317,8 +321,14 @@ Subject to:
 - Background process (no exposed port)
 - Polls InfluxDB every 30 s; maintains 6-step (60 s) sliding window per cell
 - Bidirectional LSTM classifier (5 classes): NORMAL, OVERLOAD, UNDERLOAD, SINR_LOW, POWER_WASTE
+- **9 features**: prb_dl_pct, sinr_db, connected_ues, power_w, packet_loss_pct, dl_throughput_mbps, cqi, bler_pct, latency_ms
 - Rule-based fallback for first 60 s while window fills; then AI inference with 70% confidence gate
-- Actions: calls `/move/cell` for overload rebalancing; writes `alerts` to InfluxDB
+- **Autonomous SON actions** (all 4 anomaly types):
+  - OVERLOAD → `POST /move/cell` to lightest DU + writes `LOAD_BALANCE` to both `alerts` and `son_actions`; 3-cycle per-cell cooldown prevents thrashing while InfluxDB data catches up
+  - UNDERLOAD → writes `TRAFFIC_STEER` to `son_actions` (recommend handing remaining UEs to least-loaded other DU to enable sleep/DTX)
+  - SINR_LOW → best-effort `POST /son/pci-reopt` on Controller + writes `PCI_REOPT_REQUEST` to `son_actions`
+  - POWER_WASTE → writes `DTX_RECOMMEND` to `son_actions` with estimated watt savings
+- Writes `alerts` and `son_actions` measurements to InfluxDB
 
 ### Agent 5 — Map Server (`agents/map_server/`)
 - FastAPI on port 8083
@@ -358,18 +368,25 @@ Subject to:
 
 | Measurement | Tags | Key Fields |
 |---|---|---|
-| `cell_kpi` | cell_id, area, band, pci, du_id, cu_id, vendor, generation | connected_ues, dl/ul_throughput_mbps, rsrp_dbm, sinr_db, power_w, prb_dl/ul_pct, packet_loss_pct |
+| `cell_kpi` | cell_id, area, band, pci, du_id, cu_id, vendor, generation | connected_ues, dl/ul_throughput_mbps, rsrp_dbm, rsrq_db, sinr_db, power_w, prb_dl/ul_pct, packet_loss_pct, cqi, mcs, bler_pct, latency_ms, jitter_ms, interference_dbm |
 | `du_kpi` | du_id, cu_id | active_ues, cell_count, cpu_pct, memory_pct, fronthaul_latency_us |
 | `cu_kpi` | cu_id | rrc_connected, rrc_idle, pdcp_dl/ul_gbps, f1/n2/n3/e1_latency_ms |
 | `core_kpi` | component, instance_id | registered_ues, active_sessions, throughput_gbps |
 | `ue_mobility` | ue_id, source_cell, target_cell, event_type | rsrp_source/target, ho_duration_ms, velocity_kmh |
 | `ue_usage` | ue_id, cell_id, slice_type | dl/ul_bytes, latency_ms, jitter_ms, packet_loss |
 | `alerts` | severity, cell_id, du_id, alert_type | message, metric_value, threshold, ai_confidence |
+| `son_actions` | cell_id, du_id, action_type | message, confidence (written by KPI agent for every autonomous SON decision) |
 | `topology_event` | event_type | cell_id/du_id, from/to component |
 
 ---
 
 ## Task List (Due: 15 June 2026)
+
+### Phase 0 — Digital Twin & Dataset ✅ COMPLETE
+- [x] **DU simulator extended** — 7 new KPI fields: rsrq_db, cqi, mcs, bler_pct, latency_ms, jitter_ms, interference_dbm (physics-based, correlated with SINR/load)
+- [x] **Day-of-week traffic variation** — `WEEKEND_FACTOR = 0.75`; Saturday/Sunday load scaled down in `load_factor()`
+- [x] **`dataset_generator.py`** — standalone script; 50,400-row CSV (70 days × 24 h × 30 cells); 32 columns; realistic class distribution (70% NORMAL / 15% OVERLOAD / 8% UNDERLOAD / 5% SINR_LOW / 2% POWER_WASTE); CLI: `--days`, `--seed`, `--out`
+- [x] KPI values grounded in 4 reference Kaggle datasets (suraj520/cellular-network-performance-data, srikumarnayak/5g-network-kpi-dataset, praveenaparimi/telecom-network-dataset, suraj520/cellular-network-analysis-dataset)
 
 ### Phase 1 — Foundation ✅ COMPLETE
 - [x] Define data schema (InfluxDB measurements + topology.json with vendor/hardware metadata)
@@ -395,40 +412,55 @@ Subject to:
 - [x] **Installation vs. operational cost split** — one-time CAPEX (c_jt) vs. per-period OPEX (r_jt)
 - [x] `/plan/multi-period` endpoint; `use_mip` flag on `/plan`; `plan_network_multi_period` Orchestrator tool
 
-### Phase 3 — Deployment Agent ⚠️ MOSTLY COMPLETE
+### Phase 3 — Deployment Agent ✅ COMPLETE
 
 - [x] Topology manifest generation from planning outputs (topology.json format)
 - [x] Health-check: Controller validates DU/CU acknowledgement via topology polling
-- [ ] **`/topology/replace` endpoint missing from Controller** — `plan/apply` calls `POST /topology/replace` on the controller but this endpoint does not exist; plans fall back to returning the topology JSON for manual application. Must add this endpoint to `agents/controller/controller.py`.
-- [ ] **`plan_to_topology()` strips cell fields** — vendor, hardware_model, generation, antenna_config, tx_power_w, idle_power_w, peak_dl_mbps are dropped when converting a plan to topology format. Applied plans would cause DU simulators to fall back to wrong defaults. These fields must be propagated through `CANDIDATE_CELLS` and preserved in `plan_to_topology()`.
+- [x] **`POST /topology/replace`** added to Controller — `plan/apply` now deploys plans live
+- [x] **`plan_to_topology()` fixed** — vendor, hardware_model, generation, antenna_config, tx_power_w, idle_power_w, peak_dl_mbps propagated through CANDIDATE_CELLS and preserved
+- [x] **`POST /cells/add`** — conversational single-cell deployment via `add_cell` orchestrator tool
+- [x] **`DELETE /cells/{id}`** — remove a cell via `remove_cell` orchestrator tool
+- [x] **`GET /neighbors/{cell_id}`** — geographic neighbor lookup for SON ANR
 - [ ] Helm/K8s manifest generation (prod — post-demo)
 - [ ] SMO northbound API registration (prod — post-demo)
 
 ### Phase 4 — KPI Monitoring & Optimization Agent ✅ COMPLETE
 - [x] KPI telemetry pipeline (InfluxDB, polled every 30 s)
 - [x] Bidirectional LSTM anomaly classifier: NORMAL / OVERLOAD / UNDERLOAD / SINR_LOW / POWER_WASTE
-- [x] Overload detection (PRB > 85%) with automatic cell-move action
-- [x] Underload / power-waste detection with INFO/WARNING alerts
-- [x] SINR degradation CRITICAL alerting
+- [x] **9-feature BiLSTM** — added cqi, bler_pct, latency_ms; updated FEATURE_NORM, train.py class specs, and kpi_agent.py extract_features()
+- [x] **Realistic training distribution** — 70% NORMAL / 15% OVERLOAD / 8% UNDERLOAD / 5% SINR_LOW / 2% POWER_WASTE; WeightedRandomSampler for balanced training; separate 4G/5G feature specs
+- [x] Overload detection (PRB > 85%) → automatic cell-move to lightest DU + `LOAD_BALANCE` written to `alerts` and `son_actions`; 3-cycle per-cell move cooldown prevents InfluxDB-lag thrash
+- [x] Underload detection → `TRAFFIC_STEER` SON action written to `son_actions` (recommend handing UEs to least-loaded other DU to enable sleep/DTX)
+- [x] SINR degradation → `PCI_REOPT_REQUEST` SON action + best-effort `/son/pci-reopt` Controller call
+- [x] Power waste detection → `DTX_RECOMMEND` SON action with estimated watt savings
 - [x] Rule-based fallback for first 60 s; AI inference thereafter with confidence gate
 - [x] Alert writes to InfluxDB `alerts` measurement with `ai_confidence` field
+- [x] SON action writes to InfluxDB `son_actions` measurement with `action_type`, `confidence` fields
 - [ ] Reinforcement learning-based power optimizer (future sprint)
 
 ### Phase 5 — Orchestrator Agent ✅ COMPLETE
 - [x] LLM chat interface (FastAPI POST /chat, streaming via sync generator + StreamingResponse)
-- [x] Tool-calling loop: multi-step while loop; all 9 tools wired; tool results JSON-sanitised before re-injection
+- [x] Tool-calling loop: multi-step while loop; all 13 tools wired; tool results JSON-sanitised before re-injection
 - [x] Anthropic→Gemini tool schema translation at startup (`_clean_params` strips `default` and empty `enum`)
 - [x] Context injection: `build_network_context()` polls Controller `/network` on every request
 - [x] Conversation history: per-session in-memory `_sessions` dict of `types.Content` lists
 - [x] `chat.py` CLI client: terminal REPL with `/status`, `/alerts`, `/cells`, `/plan`, `/history`, `/clear`, `/tools` shortcuts; named sessions via `--session`; no external dependencies
+- [x] **4 new tools** — `query_ue` (UE usage/mobility lookup), `get_son_status` (SON action summary), `add_cell` (deploy new cell via chat), `remove_cell` (decommission cell via chat)
 - [ ] End-to-end integration test suite
 
-### Phase 6 — Map Visualization ✅ COMPLETE
+### Phase 6 — Map Visualization & Dashboards ✅ COMPLETE
 - [x] Leaflet.js live cell map (port 8083)
 - [x] Colour-coded markers: vendor colour + 5G/4G opacity + status (overloaded/SINR low)
 - [x] Click popup: vendor, hardware, band, DU/CU, KPIs
 - [x] Filter controls: show/hide by generation and vendor
 - [x] Auto-refresh every 30 s; status bar with aggregate counts
+- [x] AI chat panel integrated in map UI (right-side panel); shortcuts: `/status`, `/alerts`, `/cells`, `/plan`, `/son`, `/ue`
+- [x] **5 Grafana dashboards** provisioned via `grafana/provisioning/dashboards/default.yaml`:
+  - `network_overview.json` — total UEs, active cells, avg DL/SINR, overloaded cells, total power; UE/PRB/SINR/power timeseries
+  - `cell_kpi.json` — per-cell PRB, SINR, RSRP, throughput, power, CQI, BLER+latency; generation filter variable
+  - `ue_analytics.json` — UE slice distribution (donut), latency/jitter/bytes by slice, HO event rate and duration
+  - `son_alerts.json` — CRITICAL/WARNING counts, SON action counts by type, AI confidence timeseries, SON action log
+  - `du_cu_performance.json` — DU CPU/memory/fronthaul latency/F1 msg rate, CU PDCP throughput, core registered UEs, UPF throughput
 
 ### Phase 7 — Testing & Demo
 - [ ] Unit tests for planning algorithms (placement, PCI, slicing)
@@ -452,8 +484,12 @@ GET  /cells/{cell_id}                    cell detail + 30-min KPI time series
 GET  /dus
 GET  /cus
 
-POST /move/cell  {"cell_id":"...", "to_du_id":"..."}
-POST /move/du    {"du_id":"...",   "to_cu_id":"..."}
+POST /move/cell          {"cell_id":"...", "to_du_id":"..."}
+POST /move/du            {"du_id":"...",   "to_cu_id":"..."}
+POST /topology/replace   {"cus":{...}, "dus":{...}, "cells":{...}}   ← full topology swap (used by plan/apply)
+POST /cells/add          {cell_id, du_id, area, lat, lon, generation, band, vendor, ...}
+DELETE /cells/{cell_id}
+GET  /neighbors/{cell_id}?max_neighbors=6                             ← Haversine geographic neighbour list
 ```
 
 ## Planning API Reference

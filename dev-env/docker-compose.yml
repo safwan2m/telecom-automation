@@ -39,6 +39,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
 
   # ── 5G/4G NSA Core ────────────────────────────────────────────────────────
 

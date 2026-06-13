@@ -242,7 +242,12 @@ def generate_plan(req: PlanRequest) -> dict:
 
 
 def plan_to_topology(plan: dict) -> dict:
-    """Convert a network plan into the topology.json format used by the Controller."""
+    """Convert a network plan into the topology.json format used by the Controller.
+
+    Preserves all hardware fields (vendor, hardware_model, generation,
+    antenna_config, tx_power_w, idle_power_w, peak_dl_mbps) so that DU
+    simulators receive correct specs rather than falling back to defaults.
+    """
     cus, dus, cells_topo = {}, {}, {}
 
     for cu in plan["cus"]:
@@ -259,13 +264,21 @@ def plan_to_topology(plan: dict) -> dict:
         }
     for c in plan["cells"]:
         cells_topo[c["cell_id"]] = {
-            "area":     c["area"],
-            "pci":      c["pci"],
-            "lat":      c["lat"],
-            "lon":      c["lon"],
-            "band":     c["band"],
-            "freq_mhz": c["freq_mhz"],
-            "max_ues":  c["max_ues"],
+            "area":           c["area"],
+            "pci":            c["pci"],
+            "lat":            c["lat"],
+            "lon":            c["lon"],
+            "band":           c["band"],
+            "freq_mhz":       c["freq_mhz"],
+            "max_ues":        c["max_ues"],
+            # Hardware fields — propagated from CANDIDATE_CELLS via **c spread
+            "generation":     c.get("generation",     "5G"),
+            "vendor":         c.get("vendor",         "Nokia"),
+            "hardware_model": c.get("hardware_model", "AirScale MAA 64T64R"),
+            "antenna_config": c.get("antenna_config", "64T64R"),
+            "tx_power_w":     c.get("tx_power_w",     1000),
+            "idle_power_w":   c.get("idle_power_w",   250),
+            "peak_dl_mbps":   c.get("peak_dl_mbps",   3800),
         }
 
     return {

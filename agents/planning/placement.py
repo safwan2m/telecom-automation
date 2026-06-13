@@ -17,18 +17,37 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# Malleswaram candidate macro sites (10 physical tower locations)
+# Malleswaram candidate macro sites (10 physical tower locations).
+# Hardware fields are propagated through plan_to_topology() so DU simulators
+# receive correct specs after a plan is applied.
+_VENDOR_CYCLE = ["Nokia", "Ericsson", "Samsung", "ZTE", "Nokia", "Ericsson", "Samsung", "ZTE", "Nokia", "Ericsson"]
+_HW_5G = {
+    "Nokia":    {"hardware_model": "AirScale MAA 64T64R", "antenna_config": "64T64R", "tx_power_w": 1000, "idle_power_w": 250, "peak_dl_mbps": 3800},
+    "Ericsson": {"hardware_model": "AIR 6449",            "antenna_config": "64T64R", "tx_power_w": 950,  "idle_power_w": 240, "peak_dl_mbps": 3600},
+    "Samsung":  {"hardware_model": "TM500 64T64R",        "antenna_config": "64T64R", "tx_power_w": 900,  "idle_power_w": 225, "peak_dl_mbps": 3400},
+    "ZTE":      {"hardware_model": "AAU 5614",             "antenna_config": "64T64R", "tx_power_w": 1000, "idle_power_w": 250, "peak_dl_mbps": 3200},
+}
+
+def _cand(i, cell_id, area, lat, lon, dw):
+    vendor = _VENDOR_CYCLE[i]
+    hw     = _HW_5G[vendor]
+    return {
+        "cell_id": cell_id, "area": area, "lat": lat, "lon": lon,
+        "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": dw,
+        "generation": "5G", "vendor": vendor, **hw,
+    }
+
 CANDIDATE_CELLS: list[dict] = [
-    {"cell_id": "MLS_RWS_01", "area": "Malleswaram", "lat": 13.0080, "lon": 77.5760, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.5},
-    {"cell_id": "MLS_18C_01", "area": "Malleswaram", "lat": 13.0030, "lon": 77.5670, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.4},
-    {"cell_id": "MLS_SPG_01", "area": "Malleswaram", "lat": 12.9990, "lon": 77.5700, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.3},
-    {"cell_id": "MLS_BEL_01", "area": "Malleswaram", "lat": 13.0110, "lon": 77.5630, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.1},
-    {"cell_id": "MLS_SNK_01", "area": "Malleswaram", "lat": 13.0060, "lon": 77.5740, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.2},
-    {"cell_id": "MLS_3MN_01", "area": "Malleswaram", "lat": 13.0010, "lon": 77.5600, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.2},
-    {"cell_id": "MLS_MGR_01", "area": "Malleswaram", "lat": 12.9960, "lon": 77.5640, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.0},
-    {"cell_id": "MLS_CHD_01", "area": "Malleswaram", "lat": 12.9930, "lon": 77.5560, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 0.9},
-    {"cell_id": "MLS_10C_01", "area": "Malleswaram", "lat": 13.0040, "lon": 77.5710, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.3},
-    {"cell_id": "MLS_6CR_01", "area": "Malleswaram", "lat": 12.9970, "lon": 77.5580, "band": "n78", "freq_mhz": 3500, "max_ues": 900, "density_weight": 1.0},
+    _cand(0, "MLS_RWS_01", "Malleswaram", 13.0080, 77.5760, 1.5),
+    _cand(1, "MLS_18C_01", "Malleswaram", 13.0030, 77.5670, 1.4),
+    _cand(2, "MLS_SPG_01", "Malleswaram", 12.9990, 77.5700, 1.3),
+    _cand(3, "MLS_BEL_01", "Malleswaram", 13.0110, 77.5630, 1.1),
+    _cand(4, "MLS_SNK_01", "Malleswaram", 13.0060, 77.5740, 1.2),
+    _cand(5, "MLS_3MN_01", "Malleswaram", 13.0010, 77.5600, 1.2),
+    _cand(6, "MLS_MGR_01", "Malleswaram", 12.9960, 77.5640, 1.0),
+    _cand(7, "MLS_CHD_01", "Malleswaram", 12.9930, 77.5560, 0.9),
+    _cand(8, "MLS_10C_01", "Malleswaram", 13.0040, 77.5710, 1.3),
+    _cand(9, "MLS_6CR_01", "Malleswaram", 12.9970, 77.5580, 1.0),
 ]
 
 COST_PER_CELL_USD   = 50_000

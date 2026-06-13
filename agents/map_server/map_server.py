@@ -329,6 +329,8 @@ MAP_HTML = """<!DOCTYPE html>
         <button class="sc-btn" data-cmd="/status">/status</button>
         <button class="sc-btn" data-cmd="/alerts">/alerts</button>
         <button class="sc-btn" data-cmd="/cells">/cells</button>
+        <button class="sc-btn" data-cmd="/son">/son</button>
+        <button class="sc-btn" data-cmd="/ue">/ue</button>
         <button class="sc-btn" data-cmd="/plan">/plan</button>
         <button class="sc-btn" data-cmd="/history">/history</button>
         <button class="sc-btn" data-cmd="/tools">/tools</button>
@@ -527,6 +529,8 @@ const CHAT_SHORTCUTS = {
   '/alerts': 'Show me all recent KPI alerts from the last 60 minutes.',
   '/cells':  'List all cells with their current connected UEs, PRB utilisation, and which DU they belong to.',
   '/plan':   'Generate a network plan for Bangalore with default parameters and show me the summary.',
+  '/son':    'Show me the SON agent status: what autonomous actions has it taken in the last hour, and are there any active anomalies?',
+  '/ue':     'Give me a summary of UE usage patterns: which slices are most active, what are the average latencies, and how many handovers have occurred?',
 };
 
 let chatSession = 'default';
