@@ -42,6 +42,7 @@ HOURLY_LOAD = [
     0.64, 0.60, 0.62, 0.68, 0.78, 0.90,
     0.95, 1.00, 0.97, 0.88, 0.62, 0.28,
 ]
+WEEKEND_FACTOR = 0.75  # weekend traffic peak ~75% of weekday
 
 # SINR and RSRP baselines by band (clear sky, low load)
 _SINR_BASE = {"n78": 22.0, "n41": 20.0, "n28": 29.0, "B3": 26.0, "B40": 23.0}
@@ -125,7 +126,11 @@ def coverage_expected_ues(area: str, radius_m: float, max_ues: int) -> int:
 
 def load_factor() -> float:
     from datetime import datetime
-    return HOURLY_LOAD[datetime.now().hour]
+    now = datetime.now()
+    factor = HOURLY_LOAD[now.hour]
+    if now.weekday() >= 5:   # Saturday=5, Sunday=6
+        factor *= WEEKEND_FACTOR
+    return factor
 
 
 def read_topology() -> dict:
@@ -192,11 +197,34 @@ class CellState:
         sinr_db   = round(sinr_base - load * 15 + random.gauss(0, 2.5), 1)
         rsrp_dbm  = round(rsrp_base - load * 22 + random.gauss(0, 3.0), 1)
 
+        # RSRQ: correlated with SINR and interference
+        rsrq_raw = -10.0 + sinr_db * 0.3 + random.gauss(0, 1.5)
+        rsrq_db  = round(max(-19.5, min(-3.0, rsrq_raw)), 1)
+
+        # CQI 0–15 (strongly correlated with SINR)
+        cqi = max(0, min(15, int((sinr_db + 5) / 2.5 + random.gauss(0, 0.8))))
+
+        # MCS 0–28 (correlated with CQI)
+        mcs = max(0, min(28, int(cqi * 1.8 + random.gauss(0, 1.2))))
+
+        # BLER rises with load and poor CQI
+        bler_pct = round(max(0.0, (load - 0.75) * 15.0 + (10 - cqi) * 0.5
+                             + random.gauss(0, 0.5)), 2)
+
         power_w = max(
             idle_pw * 0.90,
             round(idle_pw + load * (tx_pw - idle_pw) + random.gauss(0, tx_pw * 0.025), 1),
         )
         pkt_loss_pct = round(max(0.0, (load - 0.75) * 2.5 + random.gauss(0, 0.05)), 3)
+
+        # Cell-level latency and jitter (distinct from per-UE values in ue_usage)
+        lat_base   = 8.0 + load * 25.0 + max(0, 5 - sinr_db) * 2.0
+        latency_ms = round(max(1.0, lat_base + random.gauss(0, 2.0)), 1)
+        jitter_ms  = round(max(0.1, latency_ms * random.uniform(0.05, 0.15)
+                               + random.gauss(0, 0.3)), 2)
+
+        # Interference power (inter-cell, simplified)
+        interference_dbm = round(-100.0 + load * 20.0 + random.gauss(0, 3.0), 1)
 
         return dict(
             connected_ues       = self.ues,
@@ -204,12 +232,19 @@ class CellState:
             dl_throughput_mbps  = dl_tput,
             ul_throughput_mbps  = ul_tput,
             rsrp_dbm            = rsrp_dbm,
+            rsrq_db             = rsrq_db,
             sinr_db             = sinr_db,
+            cqi                 = cqi,
+            mcs                 = mcs,
+            bler_pct            = bler_pct,
             power_w             = power_w,
             prb_dl_pct          = round(prb_dl, 1),
             prb_ul_pct          = round(prb_ul, 1),
             ho_success_rate     = round(random.uniform(0.962, 0.9995), 4),
             packet_loss_pct     = pkt_loss_pct,
+            latency_ms          = latency_ms,
+            jitter_ms           = jitter_ms,
+            interference_dbm    = interference_dbm,
         )
 
     def mobility_events(self, neighbours: list["CellState"]) -> list[dict]:
@@ -330,12 +365,19 @@ def build_points(states: dict[str, CellState], cu_id: str) -> list[Point]:
             .field("dl_throughput_mbps",  m["dl_throughput_mbps"])
             .field("ul_throughput_mbps",  m["ul_throughput_mbps"])
             .field("rsrp_dbm",            m["rsrp_dbm"])
+            .field("rsrq_db",             m["rsrq_db"])
             .field("sinr_db",             m["sinr_db"])
+            .field("cqi",                 m["cqi"])
+            .field("mcs",                 m["mcs"])
+            .field("bler_pct",            m["bler_pct"])
             .field("power_w",             m["power_w"])
             .field("prb_dl_pct",          m["prb_dl_pct"])
             .field("prb_ul_pct",          m["prb_ul_pct"])
             .field("ho_success_rate",     m["ho_success_rate"])
             .field("packet_loss_pct",     m["packet_loss_pct"])
+            .field("latency_ms",          m["latency_ms"])
+            .field("jitter_ms",           m["jitter_ms"])
+            .field("interference_dbm",    m["interference_dbm"])
         )
         neighbours = [s for s in cell_list if s.cell_id != state.cell_id]
         for ev in state.mobility_events(neighbours):
