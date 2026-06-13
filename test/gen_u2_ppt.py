@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Generate U2 Query Flow PowerPoint presentation."""
+
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.shapes import MSO_CONNECTOR_TYPE
+from pptx.oxml.ns import qn
+from lxml import etree
+
+# ─── Colors ──────────────────────────────────────────────────────────────────
+NAVY    = RGBColor(0x0A, 0x29, 0x55)
+BLUE    = RGBColor(0x17, 0x5C, 0xA6)
+TEAL    = RGBColor(0x00, 0x7E, 0x8A)
+GREEN   = RGBColor(0x1B, 0x6F, 0x42)
+ORANGE  = RGBColor(0xC4, 0x50, 0x08)
+PURPLE  = RGBColor(0x5A, 0x23, 0x8C)
+DGRAY   = RGBColor(0x44, 0x44, 0x44)
+LGRAY   = RGBColor(0xF0, 0xF2, 0xF5)
+WHITE   = RGBColor(0xFF, 0xFF, 0xFF)
+L_ORG   = RGBColor(0xFF, 0xF0, 0xE8)
+L_PUR   = RGBColor(0xF2, 0xEB, 0xFF)
+L_TEAL  = RGBColor(0xE0, 0xF5, 0xF7)
+QARROW  = BLUE
+RARROW  = GREEN
+
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def blank(prs):
+    return prs.slides.add_slide(prs.slide_layouts[6])
+
+
+def rect(slide, x, y, w, h, fill, border=None, bw=0.5):
+    shp = slide.shapes.add_shape(1, Inches(x), Inches(y), Inches(w), Inches(h))
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = fill
+    if border:
+        shp.line.color.rgb = border
+        shp.line.width = Pt(bw)
+    else:
+        shp.line.fill.background()
+    return shp
+
+
+def box(slide, x, y, w, h, fill, lines, fsize=11, fc=WHITE, bold0=True):
+    shp = slide.shapes.add_shape(5, Inches(x), Inches(y), Inches(w), Inches(h))
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = fill
+    shp.line.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+    shp.line.width = Pt(0.5)
+    tf = shp.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    for i, text in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = PP_ALIGN.CENTER
+        r = p.add_run()
+        r.text = text
+        r.font.size = Pt(fsize)
+        r.font.color.rgb = fc
+        r.font.bold = (bold0 and i == 0)
+    return shp
+
+
+def lbl(slide, x, y, w, h, text, fsize=9, fc=DGRAY, bold=False, italic=False,
+        align=PP_ALIGN.CENTER):
+    txb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+    tf = txb.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.alignment = align
+    r = p.add_run()
+    r.text = text
+    r.font.size = Pt(fsize)
+    r.font.color.rgb = fc
+    r.font.bold = bold
+    r.font.italic = italic
+    return txb
+
+
+def arrow(slide, x1, y1, x2, y2, color=None, width=1.75, dashed=False):
+    if color is None:
+        color = QARROW
+    conn = slide.shapes.add_connector(
+        MSO_CONNECTOR_TYPE.STRAIGHT,
+        Inches(x1), Inches(y1), Inches(x2), Inches(y2)
+    )
+    conn.line.color.rgb = color
+    conn.line.width = Pt(width)
+    if dashed:
+        from pptx.enum.dml import MSO_LINE_DASH_STYLE
+        conn.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+    try:
+        ln = conn.line._ln
+        tail = etree.SubElement(ln, qn('a:tailEnd'))
+        tail.set('type', 'triangle')
+        tail.set('w', 'med')
+        tail.set('len', 'med')
+    except Exception:
+        pass
+    return conn
+
+
+# ─── Build ───────────────────────────────────────────────────────────────────
+prs = Presentation()
+prs.slide_width  = Inches(13.33)
+prs.slide_height = Inches(7.5)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 1 — Title
+# ══════════════════════════════════════════════════════════════════════════════
+s1 = blank(prs)
+rect(s1, 0, 0, 13.33, 7.5, NAVY)
+rect(s1, 0, 0, 0.22, 7.5, RGBColor(0x00, 0xB4, 0xF0))
+
+lbl(s1, 0.45, 2.4,  12.0, 1.3,  'U2 Query Flow',
+    fsize=52, fc=WHITE, bold=True, align=PP_ALIGN.LEFT)
+lbl(s1, 0.45, 3.85, 12.0, 0.9,
+    '"How many UEs are connected to MLS_RWS_01?"',
+    fsize=22, fc=RGBColor(0x99, 0xCC, 0xFF), italic=True, align=PP_ALIGN.LEFT)
+lbl(s1, 0.45, 5.0,  12.0, 0.5,
+    'Tool: query_cell(cell_id="MLS_RWS_01")  →  extract connected_ues from 30-min KPI series',
+    fsize=13, fc=RGBColor(0x55, 0xDD, 0x88), bold=True, align=PP_ALIGN.LEFT)
+lbl(s1, 0.45, 5.7,  12.0, 0.4,
+    '4G/5G NSA Network  ·  Malleswaram  ·  Single Cell Query  ·  30-min KPI Time Series',
+    fsize=11, fc=RGBColor(0x77, 0x99, 0xBB), align=PP_ALIGN.LEFT)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 2 — Flow Diagram
+# ══════════════════════════════════════════════════════════════════════════════
+s2 = blank(prs)
+rect(s2, 0, 0, 13.33, 7.5, LGRAY)
+
+# Header
+rect(s2, 0, 0, 13.33, 0.9, NAVY)
+lbl(s2, 0.3, 0.05, 9.5, 0.8, 'U2 Query Flow — System Data Path',
+    fsize=22, fc=WHITE, bold=True, align=PP_ALIGN.LEFT)
+lbl(s2, 10.0, 0.1, 3.0, 0.7, 'query_cell',
+    fsize=15, fc=RGBColor(0x88, 0xCC, 0xFF), bold=True)
+
+# Layer bands
+rect(s2, 0.95, 1.0,  12.35, 1.8,  L_ORG,  border=RGBColor(0xDD, 0xAA, 0x80))
+rect(s2, 0.95, 2.8,  12.35, 1.95, L_PUR,  border=RGBColor(0xAA, 0x88, 0xCC))
+rect(s2, 0.95, 4.75, 12.35, 2.65, L_TEAL, border=RGBColor(0x77, 0xBB, 0xBB))
+
+# Layer labels
+lbl(s2, 0.0, 1.35, 0.98, 0.9,  'USER', fsize=8, fc=ORANGE, bold=True)
+lbl(s2, 0.0, 3.1,  0.98, 0.9,  'AI',   fsize=8, fc=PURPLE, bold=True)
+lbl(s2, 0.0, 5.4,  0.98, 0.9,  'DATA', fsize=8, fc=TEAL,   bold=True)
+
+# ── Row 1: User Layer ─────────────────────────────────────────────────────────
+box(s2, 1.1, 1.15, 1.5, 0.85, ORANGE, ['User', 'query input'], fsize=11)
+box(s2, 3.3, 1.15, 1.9, 0.85, BLUE,   ['chat.py', 'localhost:8082'], fsize=11)
+
+# ── Row 2: AI Layer ───────────────────────────────────────────────────────────
+box(s2, 1.1, 2.95, 2.2, 0.85, NAVY,   ['Orchestrator', 'port 8082'], fsize=11)
+box(s2, 4.3, 2.95, 2.6, 0.85, PURPLE, ['Gemini LLM', 'gemini-2.5-flash'], fsize=11)
+
+# ── Row 3: Data Layer ─────────────────────────────────────────────────────────
+box(s2, 1.1, 4.9,  2.2, 0.85, TEAL,  ['Controller', 'port 8080'], fsize=11)
+# topology.json — still queried for cell config
+box(s2, 4.1, 5.85, 2.3, 0.85, GREEN, ['topology.json', 'cell config for MLS_RWS_01'], fsize=10)
+# InfluxDB — returns 30-min time series (key U2 difference)
+box(s2, 7.3, 5.85, 2.7, 0.85, GREEN, ['InfluxDB', '30-min KPI series\nfor MLS_RWS_01'], fsize=10)
+
+# ── Arrows: Query path (BLUE) ─────────────────────────────────────────────────
+# 1. User → chat.py
+arrow(s2, 2.6, 1.575, 3.3, 1.575, color=QARROW)
+lbl(s2, 2.6, 1.2, 0.7, 0.35, 'HTTP\nPOST', fsize=7, fc=BLUE)
+
+# 2. chat.py → Orchestrator
+arrow(s2, 4.25, 2.0, 2.2, 2.95, color=QARROW)
+lbl(s2, 2.7, 2.35, 1.5, 0.35, 'POST /chat', fsize=7, fc=BLUE)
+
+# 3. Orchestrator → Gemini (prompt)
+arrow(s2, 3.3, 3.1, 4.3, 3.1, color=QARROW)
+lbl(s2, 3.3, 2.75, 1.05, 0.35, 'prompt +\nsnapshot', fsize=7, fc=BLUE)
+
+# 4. Gemini → Orchestrator (function call: query_cell — U2 key difference)
+arrow(s2, 4.3, 3.55, 3.3, 3.55, color=RARROW)
+lbl(s2, 3.25, 3.6, 1.1, 0.35, 'fn call:\nquery_cell', fsize=7, fc=GREEN)
+
+# 5. Orchestrator → Controller (GET /cells/MLS_RWS_01 — U2 key difference)
+arrow(s2, 2.2, 3.8, 2.2, 4.9, color=QARROW)
+lbl(s2, 2.25, 4.25, 1.55, 0.45, 'GET /cells/\nMLS_RWS_01', fsize=7, fc=BLUE)
+
+# 6. Controller → topology.json (read cell config)
+arrow(s2, 2.5, 5.75, 4.1, 6.1, color=QARROW)
+lbl(s2, 2.7, 5.55, 1.3, 0.3, 'read config', fsize=7, fc=BLUE)
+
+# 7. Controller → InfluxDB (30-min KPI series — U2 key difference)
+arrow(s2, 3.0, 5.6, 7.3, 5.95, color=QARROW)
+lbl(s2, 4.7, 5.35, 2.2, 0.3, 'Flux query: 30-min KPI series', fsize=7, fc=BLUE)
+
+# ── Arrows: Response path (GREEN, dashed) ────────────────────────────────────
+# 8. topology.json → Controller
+arrow(s2, 4.6, 5.85, 3.1, 5.0, color=RARROW, dashed=True)
+lbl(s2, 3.6, 5.3, 1.1, 0.3, 'cell config', fsize=7, fc=GREEN)
+
+# 9. InfluxDB → Controller (time series — U2 key difference)
+arrow(s2, 7.5, 5.85, 3.2, 5.2, color=RARROW, dashed=True)
+lbl(s2, 5.0, 5.65, 2.3, 0.3, 'connected_ues time series', fsize=7, fc=GREEN)
+
+# 10. Controller → Orchestrator (cell detail response)
+arrow(s2, 1.9, 4.9, 1.9, 3.8, color=RARROW, dashed=True)
+lbl(s2, 0.1, 4.2, 1.75, 0.45, 'cell detail\nresponse', fsize=7, fc=GREEN)
+
+# 11. Orchestrator → chat.py → User (NL reply)
+arrow(s2, 3.3, 3.65, 2.3, 2.1,  color=RARROW, dashed=True)
+arrow(s2, 2.25, 2.05, 1.85, 1.75, color=RARROW, dashed=True)
+lbl(s2, 0.6, 2.5, 1.4, 0.35, 'NL reply', fsize=7, fc=GREEN)
+
+# ── Legend ────────────────────────────────────────────────────────────────────
+rect(s2, 10.0, 1.15, 3.1, 1.45, WHITE, border=RGBColor(0xCC, 0xCC, 0xCC))
+lbl(s2, 10.05, 1.18, 3.0, 0.35, 'Legend', fsize=10, fc=NAVY, bold=True)
+arrow(s2, 10.1, 1.72, 10.7, 1.72, color=QARROW, width=1.5)
+lbl(s2, 10.75, 1.58, 2.2, 0.3, 'Query / Request path', fsize=9, fc=DGRAY)
+arrow(s2, 10.1, 2.09, 10.7, 2.09, color=RARROW, width=1.5, dashed=True)
+lbl(s2, 10.75, 1.96, 2.2, 0.3, 'Response / Return path', fsize=9, fc=DGRAY)
+
+# Gemini note box — U2: extracts latest value, not sum
+box(s2, 7.8, 2.95, 3.0, 0.85, RGBColor(0x44, 0x22, 0x70),
+    ['Extracts latest connected_ues', 'from 30-min KPI series', '→ formulates reply'],
+    fsize=9, bold0=False)
+arrow(s2, 6.9, 3.375, 7.8, 3.375, color=PURPLE, width=1.5)
+lbl(s2, 6.9, 3.1, 0.9, 0.3, 'tool\nresult', fsize=7, fc=PURPLE)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 3 — Step-by-Step Table
+# ══════════════════════════════════════════════════════════════════════════════
+s3 = blank(prs)
+rect(s3, 0, 0, 13.33, 7.5, LGRAY)
+rect(s3, 0, 0, 13.33, 0.9, NAVY)
+lbl(s3, 0.3, 0.05, 10.0, 0.8, 'U2 Query — Step-by-Step Trace',
+    fsize=22, fc=WHITE, bold=True, align=PP_ALIGN.LEFT)
+
+steps = [
+    ('1',  'User',         'Types query into chat.py'),
+    ('2',  'chat.py',      'HTTP POST {session, message} to Orchestrator /chat'),
+    ('3',  'Orchestrator', 'Injects live network snapshot into system prompt; calls Gemini'),
+    ('4',  'Gemini LLM',   'Identifies cell name MLS_RWS_01; emits query_cell(cell_id="MLS_RWS_01")'),
+    ('5',  'Orchestrator', 'Dispatches query_cell → GET /cells/MLS_RWS_01 on Controller'),
+    ('6',  'Controller',   'Reads topology.json for MLS_RWS_01 config (PCI, band, DU/CU assignment)'),
+    ('7',  'Controller',   'Runs Flux query against InfluxDB: 30-min KPI time series for MLS_RWS_01'),
+    ('8',  'Controller',   'Returns merged cell config + 30-min KPI time series'),
+    ('9',  'Orchestrator', 'Passes tool result (cell detail) back to Gemini'),
+    ('10', 'Gemini LLM',   'Extracts the latest connected_ues value from the KPI time series'),
+    ('11', 'Gemini LLM',   'Generates natural language answer: "MLS_RWS_01 currently has X UEs connected."'),
+    ('12', 'Orchestrator', 'Returns HTTP response {reply} to chat.py'),
+    ('13', 'chat.py',      'Prints answer to user'),
+]
+
+col_colors = {
+    'User':         ORANGE,
+    'chat.py':      BLUE,
+    'Orchestrator': NAVY,
+    'Gemini LLM':   PURPLE,
+    'Controller':   TEAL,
+}
+
+ROW_H  = 0.46
+START_Y = 1.0
+for i, (step, actor, action) in enumerate(steps):
+    y = START_Y + i * ROW_H
+    bg = RGBColor(0xFF, 0xFF, 0xFF) if i % 2 == 0 else RGBColor(0xE8, 0xEC, 0xF2)
+    rect(s3, 0.3, y, 12.7, ROW_H, bg, border=RGBColor(0xCC, 0xCC, 0xCC), bw=0.3)
+    lbl(s3, 0.35, y + 0.05, 0.55, ROW_H - 0.1, step, fsize=11, fc=NAVY, bold=True)
+    actor_color = col_colors.get(actor, DGRAY)
+    rect(s3, 0.95, y + 0.08, 1.6, ROW_H - 0.16, actor_color,
+         border=RGBColor(0xAA, 0xAA, 0xAA), bw=0.3)
+    lbl(s3, 0.95, y + 0.08, 1.6, ROW_H - 0.16, actor, fsize=9, fc=WHITE, bold=True)
+    lbl(s3, 2.65, y + 0.05, 10.3, ROW_H - 0.1, action,
+        fsize=10, fc=DGRAY, align=PP_ALIGN.LEFT)
+
+
+# ─── Save ─────────────────────────────────────────────────────────────────────
+out = r'c:\Users\gurs2\OneDrive\Documents\GitHub\telecom-automation\test\U2_Query_Flow.pptx'
+prs.save(out)
+print(f'Saved: {out}')
