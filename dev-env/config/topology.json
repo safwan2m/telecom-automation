@@ -1,7 +1,7 @@
 {
-  "version": 517,
-  "last_updated": "2026-06-13T12:20:02.723125+00:00",
-  "updated_by": "move_cell:MLS_SNK_01",
+  "version": 536,
+  "last_updated": "2026-06-13T12:59:34.938623+00:00",
+  "updated_by": "move_cell:MLS_RWS_01",
   "meta": {
     "city": "Bangalore",
     "zone": "Malleswaram",
@@ -43,12 +43,8 @@
         "MLS_SNK_03",
         "MLS_10C_01",
         "MLS_18C_01",
-        "MLS_3MN_01",
-        "MLS_6CR_01",
         "MLS_BEL_01",
-        "MLS_CHD_01",
         "MLS_MGR_01",
-        "MLS_RWS_01",
         "MLS_SNK_01"
       ]
     },
@@ -77,7 +73,11 @@
         "MLS_CHD_03",
         "MLS_6CR_02",
         "MLS_6CR_03",
-        "MLS_10C_02"
+        "MLS_10C_02",
+        "MLS_3MN_01",
+        "MLS_6CR_01",
+        "MLS_CHD_01",
+        "MLS_RWS_01"
       ]
     }
   },
