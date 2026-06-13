@@ -1,7 +1,7 @@
 """
 LSTM-based KPI classifier for 5G cell anomaly detection.
 
-Input : sequence of 6 KPI readings per cell  (shape: batch × SEQ_LEN × N_FEATURES)
+Input : sequence of 9 KPI readings per cell  (shape: batch × SEQ_LEN × N_FEATURES)
 Output: one of 5 cell-state classes
 
 Classes

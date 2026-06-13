@@ -22,6 +22,8 @@ def _ctrl(path: str, method="GET", body: dict | None = None) -> Any:
     try:
         if method == "GET":
             r = httpx.get(url, timeout=8.0)
+        elif method == "DELETE":
+            r = httpx.delete(url, timeout=8.0)
         else:
             r = httpx.post(url, json=body, timeout=8.0)
         r.raise_for_status()
@@ -160,11 +162,15 @@ from(bucket: "{INFLUX_BUCKET}")
   |> last()
   |> limit(n: 50)
 """
+    cell_mob_filter = (
+        f'|> filter(fn: (r) => r.source_cell == "{cell_id}" or r.target_cell == "{cell_id}")'
+        if cell_id else ""
+    )
     flux_mob = f"""
 from(bucket: "{INFLUX_BUCKET}")
   |> range(start: -{last_minutes}m)
   |> filter(fn: (r) => r._measurement == "ue_mobility")
-  {ue_filter}
+  {ue_filter}{cell_mob_filter}
   |> filter(fn: (r) => r._field == "ho_duration_ms" or r._field == "rsrp_source"
                     or r._field == "rsrp_target" or r._field == "velocity_kmh")
   |> last()
@@ -236,12 +242,19 @@ def add_cell(
     PCI is auto-assigned if not specified.
     The DU simulator picks up the new cell within TOPO_POLL_SEC (default 5 s).
     """
-    hw_defaults = {
+    hw_5g = {
         "Nokia":    {"hardware_model": "AirScale MAA 64T64R", "antenna_config": "64T64R", "peak_dl_mbps": 3800, "idle_power_w": 250, "freq_mhz": 3500},
         "Ericsson": {"hardware_model": "AIR 6449",            "antenna_config": "64T64R", "peak_dl_mbps": 3600, "idle_power_w": 240, "freq_mhz": 3500},
         "Samsung":  {"hardware_model": "TM500 64T64R",        "antenna_config": "64T64R", "peak_dl_mbps": 3400, "idle_power_w": 225, "freq_mhz": 3500},
-        "ZTE":      {"hardware_model": "AAU 5614",             "antenna_config": "64T64R", "peak_dl_mbps": 3200, "idle_power_w": 250, "freq_mhz": 3500},
+        "ZTE":      {"hardware_model": "AAU 5614",            "antenna_config": "64T64R", "peak_dl_mbps": 3200, "idle_power_w": 250, "freq_mhz": 3500},
     }
+    hw_4g = {
+        "Nokia":    {"hardware_model": "Flexi Multiradio 10 AWHFA", "antenna_config": "4T4R", "peak_dl_mbps": 150, "idle_power_w": 80, "freq_mhz": 1800},
+        "Ericsson": {"hardware_model": "Radio 4449",                 "antenna_config": "4T4R", "peak_dl_mbps": 150, "idle_power_w": 70, "freq_mhz": 1800},
+        "Samsung":  {"hardware_model": "NR RU 4T4R",                 "antenna_config": "4T4R", "peak_dl_mbps": 150, "idle_power_w": 65, "freq_mhz": 1800},
+        "ZTE":      {"hardware_model": "AARU 4T4R",                  "antenna_config": "4T4R", "peak_dl_mbps": 150, "idle_power_w": 75, "freq_mhz": 1800},
+    }
+    hw_defaults = hw_4g if generation == "4G" else hw_5g
     hw = hw_defaults.get(vendor, hw_defaults["Nokia"])
     body = {
         "cell_id": cell_id, "du_id": du_id, "area": area,
@@ -259,13 +272,7 @@ def add_cell(
 
 def remove_cell(cell_id: str) -> dict:
     """Remove a cell from the live network topology."""
-    url = f"{CONTROLLER_URL}/cells/{cell_id}"
-    try:
-        r = __import__("httpx").delete(url, timeout=8.0)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        return {"error": str(e)}
+    return _ctrl(f"/cells/{cell_id}", "DELETE")
 
 
 def get_alerts(severity: str = "", last_minutes: int = 60) -> list:

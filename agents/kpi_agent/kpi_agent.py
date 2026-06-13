@@ -182,6 +182,9 @@ def infer(model: KPIClassifier, buf: deque) -> tuple[int, float]:
     return cls, conf
 
 
+# Per-cell cooldown: prevents re-moving a cell before InfluxDB reflects the change
+_last_moved: dict[str, float] = {}
+
 # ── SON helper actions ────────────────────────────────────────────────────────
 
 def _write_son_action(write_api, cell_id: str, du_id: str,
@@ -276,12 +279,24 @@ def analyse(model: KPIClassifier,
                         candidate = du_id
                         break
                 if candidate:
-                    moved   = move_cell(cell_id, candidate)
-                    action  = f"moved to {candidate}" if moved else "auto-move failed"
-                    write_alert(write_api, "INFO", cell_id, c["du_id"],
-                                "LOAD_BALANCE",
-                                f"[{source}] Load-balance action: {action}",
-                                c["prb_dl_pct"], OVERLOAD_PRB, conf)
+                    cooldown = POLL_SEC * 3
+                    now = time.time()
+                    if now - _last_moved.get(cell_id, 0) >= cooldown:
+                        moved = move_cell(cell_id, candidate)
+                        if moved:
+                            _last_moved[cell_id] = now
+                        action = f"moved to {candidate}" if moved else "auto-move failed"
+                        write_alert(write_api, "INFO", cell_id, c["du_id"],
+                                    "LOAD_BALANCE",
+                                    f"[{source}] Load-balance action: {action}",
+                                    c["prb_dl_pct"], OVERLOAD_PRB, conf)
+                        _write_son_action(
+                            write_api, cell_id, c["du_id"], "LOAD_BALANCE",
+                            f"[SON] OVERLOAD: {action} (PRB {c['prb_dl_pct']:.1f}%)",
+                            conf,
+                        )
+                    else:
+                        log.info("Skipping move for %s — cooldown active", cell_id)
 
         elif cls == 2:  # UNDERLOAD
             underload += 1
@@ -291,15 +306,17 @@ def analyse(model: KPIClassifier,
                             f"[{source}] Low utilisation — sleep candidate "
                             f"(PRB {c['prb_dl_pct']:.1f}%)",
                             c["prb_dl_pct"], UNDERLOAD_PRB, conf)
-                # SON action: find the most-loaded DU and offer traffic steering
-                candidate_du = max(du_avg, key=lambda d: du_avg[d])
-                _write_son_action(
-                    write_api, cell_id, c["du_id"], "TRAFFIC_STEER",
-                    f"[SON] UNDERLOAD: recommend steering traffic from {cell_id} "
-                    f"(PRB {c['prb_dl_pct']:.1f}%) toward {candidate_du} "
-                    f"(PRB {du_avg[candidate_du]:.1f}%) to free compute resources",
-                    conf,
-                )
+                # SON: recommend handing remaining UEs to lightest other DU to enable sleep/DTX
+                other_dus = {d: v for d, v in du_avg.items() if d != c["du_id"]}
+                if other_dus:
+                    candidate_du = min(other_dus, key=lambda d: other_dus[d])
+                    _write_son_action(
+                        write_api, cell_id, c["du_id"], "TRAFFIC_STEER",
+                        f"[SON] UNDERLOAD: recommend handing over remaining UEs from {cell_id} "
+                        f"(PRB {c['prb_dl_pct']:.1f}%) to cells on {candidate_du} "
+                        f"(PRB {other_dus[candidate_du]:.1f}%) to enable sleep/DTX mode",
+                        conf,
+                    )
 
         elif cls == 3:  # SINR_LOW
             sinr_low += 1
