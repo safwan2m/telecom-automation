@@ -324,8 +324,8 @@ Subject to:
 - **9 features**: prb_dl_pct, sinr_db, connected_ues, power_w, packet_loss_pct, dl_throughput_mbps, cqi, bler_pct, latency_ms
 - Rule-based fallback for first 60 s while window fills; then AI inference with 70% confidence gate
 - **Autonomous SON actions** (all 4 anomaly types):
-  - OVERLOAD → `POST /move/cell` to lightest DU + writes `LOAD_BALANCE` to `son_actions`
-  - UNDERLOAD → writes `TRAFFIC_STEER` to `son_actions` (steer toward most-loaded DU)
+  - OVERLOAD → `POST /move/cell` to lightest DU + writes `LOAD_BALANCE` to both `alerts` and `son_actions`; 3-cycle per-cell cooldown prevents thrashing while InfluxDB data catches up
+  - UNDERLOAD → writes `TRAFFIC_STEER` to `son_actions` (recommend handing remaining UEs to least-loaded other DU to enable sleep/DTX)
   - SINR_LOW → best-effort `POST /son/pci-reopt` on Controller + writes `PCI_REOPT_REQUEST` to `son_actions`
   - POWER_WASTE → writes `DTX_RECOMMEND` to `son_actions` with estimated watt savings
 - Writes `alerts` and `son_actions` measurements to InfluxDB
@@ -429,8 +429,8 @@ Subject to:
 - [x] Bidirectional LSTM anomaly classifier: NORMAL / OVERLOAD / UNDERLOAD / SINR_LOW / POWER_WASTE
 - [x] **9-feature BiLSTM** — added cqi, bler_pct, latency_ms; updated FEATURE_NORM, train.py class specs, and kpi_agent.py extract_features()
 - [x] **Realistic training distribution** — 70% NORMAL / 15% OVERLOAD / 8% UNDERLOAD / 5% SINR_LOW / 2% POWER_WASTE; WeightedRandomSampler for balanced training; separate 4G/5G feature specs
-- [x] Overload detection (PRB > 85%) → automatic cell-move to lightest DU + `LOAD_BALANCE` SON action
-- [x] Underload detection → `TRAFFIC_STEER` SON action written to `son_actions`
+- [x] Overload detection (PRB > 85%) → automatic cell-move to lightest DU + `LOAD_BALANCE` written to `alerts` and `son_actions`; 3-cycle per-cell move cooldown prevents InfluxDB-lag thrash
+- [x] Underload detection → `TRAFFIC_STEER` SON action written to `son_actions` (recommend handing UEs to least-loaded other DU to enable sleep/DTX)
 - [x] SINR degradation → `PCI_REOPT_REQUEST` SON action + best-effort `/son/pci-reopt` Controller call
 - [x] Power waste detection → `DTX_RECOMMEND` SON action with estimated watt savings
 - [x] Rule-based fallback for first 60 s; AI inference thereafter with confidence gate
@@ -484,8 +484,12 @@ GET  /cells/{cell_id}                    cell detail + 30-min KPI time series
 GET  /dus
 GET  /cus
 
-POST /move/cell  {"cell_id":"...", "to_du_id":"..."}
-POST /move/du    {"du_id":"...",   "to_cu_id":"..."}
+POST /move/cell          {"cell_id":"...", "to_du_id":"..."}
+POST /move/du            {"du_id":"...",   "to_cu_id":"..."}
+POST /topology/replace   {"cus":{...}, "dus":{...}, "cells":{...}}   ← full topology swap (used by plan/apply)
+POST /cells/add          {cell_id, du_id, area, lat, lon, generation, band, vendor, ...}
+DELETE /cells/{cell_id}
+GET  /neighbors/{cell_id}?max_neighbors=6                             ← Haversine geographic neighbour list
 ```
 
 ## Planning API Reference
