@@ -20,6 +20,9 @@ INFLUXDB_BUCKET=telecom_metrics
 INFLUXDB_TOKEN=telecom-super-secret-auth-token-2026
 GRAFANA_PASSWORD=...
 GOOGLE_API_KEY=...        # Gemini API key
+LANGCHAIN_API_KEY=...     # LangSmith API key — get from smith.langchain.com
+LANGCHAIN_TRACING_V2=true # set to false to disable tracing
+LANGCHAIN_PROJECT=telecom-automation
 ```
 
 ```bash

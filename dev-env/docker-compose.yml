@@ -129,6 +129,10 @@ services:
       INFLUX_TOKEN: ${INFLUXDB_TOKEN}
       INFLUX_ORG: ${INFLUXDB_ORG}
       INFLUX_BUCKET: ${INFLUXDB_BUCKET}
+      # ── LangSmith tracing (optional — omit LANGCHAIN_API_KEY to disable) ──
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-telecom-automation}
 
   # ── Network Map Server ────────────────────────────────────────────────────
 
