@@ -513,6 +513,55 @@ def remove_cell(cell_id: str):
             "topology_version": topo["version"]}
 
 
+@app.get("/congestion")
+def get_congestion():
+    """Return per-cell congestion scores ranked by severity.
+
+    Score = 0.40×PRB + 0.20×SINR_inv + 0.20×BLER + 0.20×latency (all normalised 0–1).
+    Levels: CRITICAL >0.75 · HIGH >0.55 · MODERATE >0.35 · LOW ≤0.35
+    """
+    kpis = latest_cell_kpis()
+    topo = read_topology()
+
+    result = []
+    for cell_id, row in kpis.items():
+        prb     = float(row.get("prb_dl_pct",        0)   or 0)
+        sinr    = float(row.get("sinr_db",           20)  or 20)
+        bler    = float(row.get("bler_pct",          1.0) or 1.0)
+        latency = float(row.get("latency_ms",        15)  or 15)
+
+        score = round(
+            0.40 * min(prb / 100.0, 1.0)
+            + 0.20 * max(0.0, 1.0 - sinr / 25.0)
+            + 0.20 * min(bler / 20.0, 1.0)
+            + 0.20 * min(latency / 150.0, 1.0),
+            3,
+        )
+        level = ("CRITICAL" if score > 0.75 else
+                 "HIGH"     if score > 0.55 else
+                 "MODERATE" if score > 0.35 else "LOW")
+
+        cell_topo = topo.get("cells", {}).get(cell_id, {})
+        result.append({
+            "cell_id":          cell_id,
+            "area":             row.get("area",   cell_topo.get("area", "")),
+            "du_id":            row.get("du_id",  cell_topo.get("du_id", "")),
+            "band":             row.get("band",   cell_topo.get("band", "")),
+            "congestion_score": score,
+            "level":            level,
+            "prb_dl_pct":       prb,
+            "sinr_db":          sinr,
+            "bler_pct":         bler,
+            "latency_ms":       latency,
+            "connected_ues":    float(row.get("connected_ues", 0) or 0),
+        })
+
+    result.sort(key=lambda x: x["congestion_score"], reverse=True)
+    counts = {lvl: sum(1 for r in result if r["level"] == lvl)
+              for lvl in ("CRITICAL", "HIGH", "MODERATE", "LOW")}
+    return {"cells": result, "summary": counts, "total_cells": len(result)}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("controller:app", host="0.0.0.0", port=8080, reload=False)
