@@ -369,9 +369,9 @@ Subject to:
 | Measurement | Tags | Key Fields |
 |---|---|---|
 | `cell_kpi` | cell_id, area, band, pci, du_id, cu_id, vendor, generation | connected_ues, dl/ul_throughput_mbps, rsrp_dbm, rsrq_db, sinr_db, power_w, prb_dl/ul_pct, packet_loss_pct, cqi, mcs, bler_pct, latency_ms, jitter_ms, interference_dbm |
-| `du_kpi` | du_id, cu_id | active_ues, cell_count, cpu_pct, memory_pct, fronthaul_latency_us |
-| `cu_kpi` | cu_id | rrc_connected, rrc_idle, pdcp_dl/ul_gbps, f1/n2/n3/e1_latency_ms |
-| `core_kpi` | component, instance_id | registered_ues, active_sessions, throughput_gbps |
+| `du_kpi` | du_id, cu_id | active_ues, cell_count, cpu_pct, memory_pct, fronthaul_latency_us, processing_delay_ms, f1_msg_per_sec |
+| `cu_kpi` | cu_id | du_count, rrc_connected, rrc_idle, rrc_setup_rate, inter_du_ho_rate, pdcp_dl_gbps, pdcp_ul_gbps, f1_latency_ms, n2_latency_ms, n3_latency_ms, e1_latency_ms, cpu_pct, memory_pct |
+| `core_kpi` | component, instance_id | **AMF**: registered_ues, active_sessions, nas_msg_per_sec, paging_per_sec, handover_per_sec, cpu_pct, memory_pct, n2_latency_ms · **SMF**: active_pdu_sessions, session_setup_rate, session_release_rate, ip_pool_utilization_pct, cpu_pct, memory_pct, n4_latency_ms · **UPF**: dl_throughput_gbps, ul_throughput_gbps, active_tunnels, packet_drop_rate, gtp_encap_errors, cpu_pct, memory_pct (field set varies by `component`; see Appendix G) |
 | `ue_mobility` | ue_id, source_cell, target_cell, event_type | rsrp_source/target, ho_duration_ms, velocity_kmh |
 | `ue_usage` | ue_id, cell_id, slice_type | dl/ul_bytes, latency_ms, jitter_ms, packet_loss |
 | `alerts` | severity, cell_id, du_id, alert_type | message, metric_value, threshold, ai_confidence |
@@ -570,3 +570,647 @@ GET  /health
 - Orchestrator correctly routes ≥ 90% of operator commands in manual testing.
 - All 30 cells stream data with zero gaps in the demo scenario.
 - Map page loads and renders all 30 cells with live KPIs within 5 s of controller startup.
+
+---
+
+# Appendices — Reconstruction Reference
+
+> These appendices document the deterministic constants, formulas, schemas, and
+> data layouts that previously existed only in source code. They make the project
+> reproducible from this spec alone. **Every value below is transcribed verbatim
+> from the implementation; where the code diverges from earlier prose in this
+> spec, a ⚠ note flags it.**
+
+## Appendix A — `topology.json` Schema & Cell Inventory
+
+### A.1 Top-level structure
+
+```jsonc
+{
+  "version":      472,                         // int, incremented on every Controller write
+  "last_updated": "2026-06-11T15:59:49.108989+00:00",  // ISO-8601 UTC
+  "updated_by":   "move_cell:MLS_SPG_01",      // who/what made the last write
+  "meta":  { ... },                            // see A.2
+  "cus":   { "<CU_ID>":   { "host", "region", "du_ids":  [ ... ] } },
+  "dus":   { "<DU_ID>":   { "cu_id", "host",  "cell_ids":[ ... ] } },
+  "cells": { "<CELL_ID>": { ...per-cell fields, see A.3 } }
+}
+```
+
+- The Controller is the **only** writer (atomic `.tmp` → rename). All simulators are read-only.
+- `dus[*].cell_ids` is **runtime state** — it is mutated by `move_cell` / SON load-balancing.
+  The shipped `topology.json` is a live snapshot (version 472) whose DU groupings have
+  been shuffled by SON and no longer match the original north/central/south-west design.
+  ⚠ The body table (CU/DU "Cells" = 12/9/9) describes the **initial design**, not the
+  current snapshot (which is 9/6/15). Per-cell attributes (`vendor`, `band`, `pci`, coords,
+  power) are intrinsic and stable across moves; only DU assignment changes.
+
+### A.2 `meta` block fields
+
+`city`, `zone`, `areas[]`, `area_population` (40000), `area_population_with_commuters`
+(46000), `commuter_overhead_pct` (15), `operator_market_share_pct` (40),
+`active_ues_peak` (18400), `erlang_busy_hour` (460), `erlang_per_cell_target` (16),
+`cells_required` (30), `note`, `ran_mode` ("4G/5G NSA"), `core`.
+
+### A.3 Per-cell field schema (`cells[*]`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `area` | str | "Malleswaram" |
+| `lat`, `lon` | float | site coordinates (all 3 sectors share a site's coords) |
+| `generation` | str | "5G" \| "4G" |
+| `band` | str | n78 \| n41 \| B3 \| B40 |
+| `freq_mhz` | int | 3500 \| 2500 \| 1800 \| 2300 |
+| `pci` | int | 0–1007 (see Appendix D.1) |
+| `vendor` | str | Nokia \| Ericsson \| Samsung \| ZTE |
+| `hardware_model` | str | e.g. "AirScale MAA 64T64R" |
+| `antenna_config` | str | "64T64R" (5G) \| "4T4R" (4G) |
+| `peak_dl_mbps` | int | per-cell DL ceiling |
+| `tx_power_w` | int | full-load TX power |
+| `idle_power_w` | int | idle draw |
+| `max_ues` | int | cell UE capacity |
+
+### A.4 Site coordinates (10 macro towers)
+
+| Site | lat | lon | Vendor | Role |
+|---|---|---|---|---|
+| RWS | 13.007 | 77.576 | Nokia | high-traffic |
+| 18C | 13.004 | 77.566 | Ericsson | high-traffic |
+| BEL | 13.011 | 77.562 | Samsung | residential |
+| SNK | 13.004 | 77.574 | ZTE | high-traffic |
+| SPG | 13.000 | 77.571 | Nokia | high-traffic |
+| 3MN | 13.000 | 77.558 | Ericsson | residential |
+| 10C | 13.003 | 77.570 | Samsung | high-traffic |
+| MGR | 12.996 | 77.562 | ZTE | residential |
+| CHD | 12.994 | 77.556 | Nokia | residential |
+| 6CR | 12.997 | 77.553 | Ericsson | residential |
+
+⚠ `placement.py:CANDIDATE_CELLS` lists near-identical (±0.002°) candidate coordinates for
+plan regeneration; the values above (from `topology.json`) are the live source of truth.
+
+### A.5 Full 30-cell inventory (stable attributes)
+
+PCI scheme is banded: n78 → 1–10, n41 → 101–105, B40 → 301–305, B3 → 201–210.
+
+| Cell | Gen | Band | MHz | PCI | Vendor | HW model | Ant | peak_dl | tx_w | idle_w | max_ues |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| MLS_RWS_01 | 5G | n78 | 3500 | 1 | Nokia | AirScale MAA 64T64R | 64T64R | 3800 | 1000 | 250 | 900 |
+| MLS_RWS_02 | 5G | n41 | 2500 | 101 | Nokia | AirScale MAA 64T64R | 64T64R | 3000 | 1000 | 250 | 700 |
+| MLS_RWS_03 | 4G | B3 | 1800 | 201 | Nokia | AWHFA | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_18C_01 | 5G | n78 | 3500 | 2 | Ericsson | AIR 6449 | 64T64R | 3600 | 950 | 237 | 900 |
+| MLS_18C_02 | 5G | n41 | 2500 | 102 | Ericsson | AIR 6449 | 64T64R | 2800 | 950 | 237 | 700 |
+| MLS_18C_03 | 4G | B3 | 1800 | 202 | Ericsson | RBS 6402 | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_BEL_01 | 5G | n78 | 3500 | 3 | Samsung | TM500 64T64R | 64T64R | 3400 | 900 | 225 | 900 |
+| MLS_BEL_02 | 4G | B40 | 2300 | 301 | Samsung | RRU | 4T4R | 150 | 200 | 50 | 300 |
+| MLS_BEL_03 | 4G | B3 | 1800 | 203 | Samsung | RRU | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_SNK_01 | 5G | n78 | 3500 | 4 | ZTE | AAU 5614 | 64T64R | 3200 | 1000 | 250 | 900 |
+| MLS_SNK_02 | 5G | n41 | 2500 | 103 | ZTE | AAU 5614 | 64T64R | 2600 | 1000 | 250 | 700 |
+| MLS_SNK_03 | 4G | B3 | 1800 | 204 | ZTE | RRU | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_SPG_01 | 5G | n78 | 3500 | 5 | Nokia | AirScale MAA 64T64R | 64T64R | 3800 | 1000 | 250 | 900 |
+| MLS_SPG_02 | 5G | n41 | 2500 | 104 | Nokia | AirScale MAA 64T64R | 64T64R | 3000 | 1000 | 250 | 700 |
+| MLS_SPG_03 | 4G | B3 | 1800 | 205 | Nokia | AWHFA | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_3MN_01 | 5G | n78 | 3500 | 6 | Ericsson | AIR 6449 | 64T64R | 3600 | 950 | 237 | 900 |
+| MLS_3MN_02 | 4G | B40 | 2300 | 302 | Ericsson | RBS 6402 | 4T4R | 150 | 200 | 50 | 300 |
+| MLS_3MN_03 | 4G | B3 | 1800 | 206 | Ericsson | RBS 6402 | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_10C_01 | 5G | n78 | 3500 | 7 | Samsung | TM500 64T64R | 64T64R | 3400 | 900 | 225 | 900 |
+| MLS_10C_02 | 5G | n41 | 2500 | 105 | Samsung | TM500 64T64R | 64T64R | 2400 | 900 | 225 | 700 |
+| MLS_10C_03 | 4G | B3 | 1800 | 207 | Samsung | RRU | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_MGR_01 | 5G | n78 | 3500 | 8 | ZTE | AAU 5614 | 64T64R | 3200 | 1000 | 250 | 900 |
+| MLS_MGR_02 | 4G | B40 | 2300 | 303 | ZTE | RRU | 4T4R | 150 | 200 | 50 | 300 |
+| MLS_MGR_03 | 4G | B3 | 1800 | 208 | ZTE | RRU | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_CHD_01 | 5G | n78 | 3500 | 9 | Nokia | AirScale MAA 64T64R | 64T64R | 3800 | 1000 | 250 | 900 |
+| MLS_CHD_02 | 4G | B40 | 2300 | 304 | Nokia | AWHFA | 4T4R | 150 | 200 | 50 | 300 |
+| MLS_CHD_03 | 4G | B3 | 1800 | 209 | Nokia | AWHFA | 4T4R | 150 | 200 | 50 | 250 |
+| MLS_6CR_01 | 5G | n78 | 3500 | 10 | Ericsson | AIR 6449 | 64T64R | 3600 | 950 | 237 | 900 |
+| MLS_6CR_02 | 4G | B40 | 2300 | 305 | Ericsson | RBS 6402 | 4T4R | 150 | 200 | 50 | 300 |
+| MLS_6CR_03 | 4G | B3 | 1800 | 210 | Ericsson | RBS 6402 | 4T4R | 150 | 200 | 50 | 250 |
+
+**Actual vendor distribution: Nokia 9, Ericsson 9, Samsung 6, ZTE 6 cells**
+(Nokia/Ericsson = 3 sites each; Samsung/ZTE = 2 sites each).
+⚠ This contradicts the body claim "Vendor Distribution (25% each — 10 cells per vendor)":
+30 cells / 4 vendors cannot be 10 each. The `_VENDOR_CYCLE` in `placement.py`
+round-robins 10 sites as `[Nokia, Ericsson, Samsung, ZTE, Nokia, Ericsson, Samsung, ZTE, Nokia, Ericsson]`.
+
+⚠ The `cells` block stores `max_ues` totalling 900×10(n78) + 700×5(n41) + 300×5(B40) + 250×10(B3) = **16,500**, against `active_ues_peak` 18,400 (matches the body's "small headroom gap" note). Per-cell `peak_dl_mbps` for n41/B40/B3 vary slightly from the body's vendor table (e.g. SNK n41 = 2600, 10C n41 = 2400); the table above is authoritative.
+
+---
+
+## Appendix B — DU Simulator KPI Generation Model
+
+Source: `dev-env/simulators/du/du_simulator.py`. Push cadence `INTERVAL_SEC = 10 s`.
+`N(0,σ)` = Gaussian noise, `U(a,b)` = uniform. All formulas as-implemented.
+
+### B.1 Coverage radius — COST-231-Hata (Urban Macro)
+
+Fixed parameters: BS height `hb = 25 m`, UE height `1.5 m`, dense-urban correction `+3 dB`,
+UE noise figure `7 dB`, coverage-edge SNR threshold `−3 dB`.
+
+Per-band RF parameters (`_BAND_PARAMS`):
+
+| Band | freq_mhz | bw_mhz | pen_loss_db |
+|---|---|---|---|
+| n78 | 3500 | 100 | 20 |
+| n41 | 2500 | 80 | 20 |
+| n28 | 700 | 20 | 15 |
+| B3 | 1800 | 20 | 18 |
+| B40 | 2300 | 20 | 18 |
+
+Antenna gain `_ANT_GAIN`: 64T64R = 24.0 dBi, 4T4R = 17.0 dBi.
+RF efficiency `_RF_EFF`: 5G = 0.22, 4G = 0.32 (default 0.25).
+
+```
+rf_w      = max(tx_power_w · rf_eff, 0.1)
+eirp_dbm  = 10·log10(rf_w · 1000) + ant_gain
+noise_dbm = −174 + 10·log10(bw_mhz · 1e6) + 7.0
+pl_max    = eirp_dbm − (noise_dbm − 3.0) − pen_loss_db
+A         = 46.3 + 33.9·log10(freq_mhz) − 13.82·log10(25) + 3.0
+B         = 44.9 − 6.55·log10(25)            # ≈ 35.74
+radius_m  = 10^((pl_max − A) / B) · 1000
+```
+
+### B.2 Population / demand model
+
+`AREA_DENSITY["Malleswaram"] = 9000` people/km² (default 700 elsewhere);
+`MARKET_SHARE = 0.40`; `PEAK_CONCURRENT = 0.40`.
+
+```
+expected_peak_ues = min( π·(radius_m/1000)² · density · 0.40 · 0.40 , max_ues )
+```
+
+### B.3 Diurnal load curve
+
+`HOURLY_LOAD` (fraction of peak, index = hour 0–23):
+
+```
+0.08 0.06 0.05 0.05 0.06 0.12   0.32 0.68 0.88 0.82 0.72 0.66
+0.64 0.60 0.62 0.68 0.78 0.90   0.95 1.00 0.97 0.88 0.62 0.28
+```
+
+`WEEKEND_FACTOR = 0.75` applied on Saturday/Sunday. `load_factor() = HOURLY_LOAD[hour] (× 0.75 on weekends)`.
+
+Slice mix per UE (`SLICES`): 7× eMBB, 2× URLLC, 1× mMTC (random choice per UE).
+
+### B.4 Per-tick UE count
+
+```
+target_ues = clamp( int(expected_peak_ues · load_factor · U(0.88,1.05)), 0, max_ues )
+```
+(Initial pool at construction uses `U(0.8,1.0)`.) `load = connected_ues / max_ues`.
+
+### B.5 `cell_kpi` field formulas
+
+```
+prb_dl_pct       = min(98, load·100·U(0.92,1.08))
+prb_ul_pct       = min(95, load·58 ·U(0.88,1.12))
+dl_throughput    = prb_dl_pct/100 · peak_dl · U(0.82,1.18)
+ul_throughput    = prb_ul_pct/100 · peak_dl · 0.22 · U(0.80,1.20)
+sinr_db          = sinr_base − load·15 + N(0,2.5)
+rsrp_dbm         = rsrp_base − load·22 + N(0,3.0)
+rsrq_db          = clip(−10 + sinr_db·0.3 + N(0,1.5), −19.5, −3.0)
+cqi              = clip(int((sinr_db+5)/2.5 + N(0,0.8)), 0, 15)
+mcs              = clip(int(cqi·1.8 + N(0,1.2)), 0, 28)
+bler_pct         = max(0, (load−0.75)·15 + (10−cqi)·0.5 + N(0,0.5))
+power_w          = max(idle·0.90, idle + load·(tx−idle) + N(0, tx·0.025))
+packet_loss_pct  = max(0, (load−0.75)·2.5 + N(0,0.05))
+latency_ms       = max(1, 8 + load·25 + max(0,5−sinr_db)·2 + N(0,2))
+jitter_ms        = max(0.1, latency_ms·U(0.05,0.15) + N(0,0.3))
+interference_dbm = −100 + load·20 + N(0,3)
+ho_success_rate  = U(0.962, 0.9995)
+```
+
+Per-band baselines:
+
+| Band | `_SINR_BASE` (dB) | `_RSRP_BASE` (dBm) |
+|---|---|---|
+| n78 | 22.0 | −72 |
+| n41 | 20.0 | −74 |
+| n28 | 29.0 | −64 |
+| B3 | 26.0 | −69 |
+| B40 | 23.0 | −73 |
+
+### B.6 `du_kpi` field formulas
+
+`load` = Σ connected_ues / Σ max_ues across the DU's cells.
+
+```
+active_ues           = Σ connected_ues
+cell_count           = number of cells on DU
+cpu_pct              = 20 + load·62 + N(0,3)
+memory_pct           = 30 + load·45 + N(0,2)
+fronthaul_latency_us = U(50,200)
+processing_delay_ms  = U(0.1,0.9)
+f1_msg_per_sec       = int(active_ues · U(0.5,2.0))
+```
+
+### B.7 `ue_mobility` (handover) events
+
+```
+n_handovers = int(connected_ues · 0.015 · random())   # per tick, ≥2 UEs and neighbours required
+rsrp_source = −70 + N(0,8);  rsrp_target = −62 + N(0,8)
+ho_duration_ms = U(18,65);   velocity_kmh = U(0,90)
+```
+The handed-over UE is physically moved into the target cell's pool.
+
+### B.8 `ue_usage` samples (≤8 UEs/cell/tick)
+
+| Slice | dl_bytes | ul_bytes | latency_ms | jitter_ms |
+|---|---|---|---|---|
+| URLLC | U(1k,60k) | U(0.5k,25k) | U(0.5,4) | U(0.1,0.8) |
+| mMTC | U(10,2k) | U(10,800) | U(10,150) | U(2,30) |
+| eMBB | derived from per-UE share of `peak_dl` | ≈ dl·U(0.08,0.22) | U(5,35) | U(0.5,6) |
+
+`packet_loss = U(0, 0.003)` for all slices.
+
+---
+
+## Appendix C — KPI Agent: Model Architecture & Training
+
+Sources: `agents/kpi_agent/model.py`, `train.py`.
+
+### C.1 `KPIClassifier` architecture
+
+```
+LSTM(input=9, hidden=64, num_layers=2, batch_first=True, dropout=0.25, bidirectional=True)
+head = Sequential(
+    Linear(128, 64),   # 128 = hidden·2 (bidirectional)
+    ReLU(),
+    Dropout(0.25),
+    Linear(64, 5),
+)
+forward(x): out,_ = lstm(x); return head(out[:, -1, :])   # last timestep only
+```
+
+`SEQ_LEN = 6` (6 × 10 s = 60 s window), `N_FEATURES = 9`, `N_CLASSES = 5`.
+Classes: 0 NORMAL, 1 OVERLOAD, 2 UNDERLOAD, 3 SINR_LOW, 4 POWER_WASTE.
+
+### C.2 Feature order & normalisation (`FEATURE_NORM`, min/range, scale to [0,1])
+
+| # | Feature | min | range |
+|---|---|---|---|
+| 0 | prb_dl_pct | 0.0 | 100.0 |
+| 1 | sinr_db | −5.0 | 35.0 |
+| 2 | connected_ues | 0.0 | 800.0 |
+| 3 | power_w | 0.0 | 1200.0 |
+| 4 | packet_loss_pct | 0.0 | 5.0 |
+| 5 | dl_throughput_mbps | 0.0 | 4000.0 |
+| 6 | cqi | 0.0 | 15.0 |
+| 7 | bler_pct | 0.0 | 30.0 |
+| 8 | latency_ms | 0.0 | 500.0 |
+
+`normalise(raw) = [(v − min) / range]`.
+
+### C.3 Training hyperparameters
+
+`EPOCHS = 60`, `BATCH_SIZE = 256`, `LR = 1e-3`, optimiser Adam, scheduler
+`CosineAnnealingLR(T_max=60)`, loss `CrossEntropyLoss`, gradient clip-norm `1.0`,
+`WeightedRandomSampler` (inverse class frequency), 80/20 train/val split, `np.random.seed(0)`.
+
+### C.4 Synthetic class counts & per-class profiles
+
+`CLASS_COUNTS`: NORMAL 3500 (70%), OVERLOAD 750 (15%), UNDERLOAD 400 (8%),
+SINR_LOW 250 (5%), POWER_WASTE 100 (2%). Each class is split evenly between a 5G
+and a 4G sub-profile (so dataset size = 2 × Σ counts). Sequences add temporal drift
+(base ± 0.5·std init; ±0.15·std per step; ±0.05·std slow drift).
+
+Per-class **means** (order = the 9 features above):
+
+| Class | 5G means | 4G means |
+|---|---|---|
+| NORMAL | 55,20,350,520,0.05,1400,11,1.5,12 | 48,22,130,120,0.04,110,10,1.2,15 |
+| OVERLOAD | 94,11,720,940,0.85,3100,7,8.0,38 | 92,12,230,195,0.75,140,6,7.0,52 |
+| UNDERLOAD | 9,24,20,330,0.01,190,14,0.3,9 | 8,25,10,65,0.01,18,13,0.2,11 |
+| SINR_LOW | 54,1,290,580,1.60,720,3,12.0,45 | 50,0,120,140,1.40,85,3,10.0,60 |
+| POWER_WASTE | 13,24,8,880,0.01,145,14,0.2,9 | 10,26,5,175,0.01,12,13,0.1,10 |
+
+(Standard deviations per class are listed in `train.py:_5G_SPECS / _4G_SPECS`.)
+
+### C.5 Inference behaviour
+
+- Poll cadence `POLL_INTERVAL_SEC` (30 s in Docker); 6-step sliding window per cell.
+- Rule-based fallback while the window fills (first ~60 s).
+- AI action gate: prediction acted on only if softmax confidence ≥ `MIN_CONFIDENCE` (0.70).
+- Weights persisted to `MODEL_PATH` (`kpi_model.pt`); trained on first boot if absent.
+
+---
+
+## Appendix D — Planning Engine Constants
+
+### D.1 PCI planner (`pci_planner.py`)
+
+`PCI_MAX = 1007`; `ADJACENCY_RADIUS_KM = 3.0` (Haversine). Greedy graph-colouring,
+cells processed in **descending adjacency-degree** order. A PCI is valid for a cell if,
+among assigned neighbours, it is **collision-free** (no shared PCI) **and confusion-free**
+(no shared `PCI mod 3`); the smallest such PCI is chosen.
+
+### D.2 Slice allocator (`slice_allocator.py`)
+
+Minimum guaranteed PRB fraction `MIN_PRB`: eMBB 0.10, URLLC 0.05, mMTC 0.02.
+Latency targets `LATENCY_TARGET_MS`: eMBB 30, URLLC 1, mMTC 100.
+Algorithm: normalise traffic profile → enforce `MIN_PRB` floor → re-normalise to 1.0 →
+`max_ues` per slice ∝ PRB fraction. Warns if `e2e_ms ≤ 1` and URLLC PRB < 0.15.
+
+`timing_sync_strategy`: TDD bands = {n78, n41, n257, n258, n260, n261}.
+`fronthaul_us ≤ 50` or any TDD → IEEE-1588-PTP-Class-C; `≤ 200` → Class-B; else SyncE.
+
+### D.3 Heuristic placement & grouping (`placement.py`)
+
+Costs: `COST_PER_CELL_USD = 50,000`, `COST_PER_DU_USD = 30,000`, `COST_PER_CU_USD = 80,000`.
+Ranges: `FRONTHAUL_RADIUS_KM = 5.0`, `MIDHAUL_RADIUS_KM = 25.0`.
+Defaults: `max_cells_per_du = 3`, `max_dus_per_cu = 4`.
+
+```
+max_cells   = clamp(int(budget·0.6 / (CELL+DU cost)), 1, len(CANDIDATE_CELLS))
+score(cell) = density_weight · (1.5 if band∈spectrum else 0.6) · (max_ues/300) · (user_density/500)
+```
+DUs named `DU-BLR-NN`, CUs `CU-BLR-NN`; both grouped greedily by Haversine from the
+highest-density anchor outward. Earth radius `R = 6371 km`.
+
+Latency estimates: fronthaul `dist_km·5 + 10` µs; midhaul `dist_km·0.01 + 0.5` ms.
+
+### D.4 MIP placement (`mip_placer.py`, `select_cells_mip`)
+
+`install_cost_per_site = budget·0.6 / max_sites`; `op_cost = 1000` USD/period;
+default `sinr_min_db = 10.0`, `time_limit_sec = 120`. Solver CBC via `pulp`;
+on non-`Optimal` status, falls back to `select_cells(500, budget, bands)` (`source = "heuristic_fallback"`).
+
+---
+
+## Appendix E — API Request Schemas (Pydantic)
+
+### E.1 Controller (`controller.py`)
+
+```python
+MoveCellRequest:  cell_id: str;  to_du_id: str
+MoveDuRequest:    du_id: str;    to_cu_id: str
+AddCellRequest:   cell_id, du_id, area: str;  lat, lon: float
+                  generation="5G", band="n78", freq_mhz=3500, pci=0,
+                  vendor="Nokia", hardware_model="AirScale MAA 64T64R",
+                  antenna_config="64T64R", peak_dl_mbps=3800,
+                  tx_power_w=1000, idle_power_w=250, max_ues=900
+```
+`POST /cells/add` auto-assigns a PCI when `pci == 0`.
+
+### E.2 Planning API (`planner_api.py`)
+
+```python
+TrafficProfile:      eMBB=0.70, URLLC=0.20, mMTC=0.10, peak_hour=19
+LatencyConstraints:  e2e_ms=10.0, fronthaul_us=100.0
+ComputeResources:    cpu_cores_per_site=32, ram_gb_per_site=64
+
+PlanRequest:
+  geographic_area="Bangalore", expected_user_density=500.0,
+  traffic_profile=TrafficProfile, fiber_availability=[],
+  spectrum_bands=["n78","n28"], latency_constraints=LatencyConstraints,
+  compute_resources=ComputeResources, deployment_budget=2_000_000.0,
+  max_cells_per_du=3, max_dus_per_cu=4,
+  use_mip=False, sinr_min_db=10.0, mip_time_limit_sec=120
+
+TimePeriodDemand:    period: int, cluster_ids: list[str], description=""
+MultiPeriodPlanRequest:
+  geographic_area="Bangalore",
+  demand_mode: Literal["permanent","temporary"]="permanent",
+  time_periods=[], spectrum_bands=["n78","n28"], deployment_budget=2_000_000.0,
+  traffic_profile=TrafficProfile, latency_constraints=LatencyConstraints,
+  max_cells_per_du=3, max_dus_per_cu=4, sinr_min_db=10.0, mip_time_limit_sec=120
+
+ApplyRequest:        plan_id: str
+```
+
+### E.3 Orchestrator / Map Server
+
+```python
+ChatRequest:  message: str;  session_id: str = "default"
+```
+
+---
+
+## Appendix F — Orchestrator Dual LLM Backend
+
+The orchestrator supports **two interchangeable LLM backends** (`orchestrator.py`),
+selected at startup by the `CLAUDE_CLI_PATH` env var:
+
+| Backend | Activated when | Client | Model name | Session store |
+|---|---|---|---|---|
+| **Gemini** (default) | `CLAUDE_CLI_PATH` unset | `genai.Client` (`google-genai`) | `GEMINI_MODEL` | `_gemini_sessions` (`types.Content`) |
+| **Claude CLI** | `CLAUDE_CLI_PATH` set | `CustomAnthropicClient` → shells out to `claude -p --model <m>` | `claude/<ANTHROPIC_MODEL_NAME>` | `_claude_sessions` (role/content dicts) |
+
+Extra env vars for the Claude backend: `CLAUDE_CLI_PATH`, `ANTHROPIC_MODEL_NAME`
+(default `sonnet` in `orchestrator.py`; `haiku` in `custom_anthropic_client.py`).
+
+⚠ The in-code Gemini default is `GEMINI_MODEL = "gemini-2.0-flash"` (`orchestrator.py:55`),
+**not** `gemini-2.5-flash` as stated elsewhere in this spec and in CLAUDE.md.
+The Docker Compose `GEMINI_MODEL` override determines the deployed model.
+⚠ The body (lines ~117–223) describes the orchestrator as Gemini-only ("not anthropic");
+the Claude-CLI backend is undocumented there. This appendix is authoritative.
+
+---
+
+## Appendix G — CU & Core Simulator Generation
+
+Sources: `dev-env/simulators/cu/cu_simulator.py`, `dev-env/simulators/core/core_simulator.py`.
+Both push every `INTERVAL_SEC = 10 s`. `N(0,σ)` = Gaussian, `U(a,b)` = uniform,
+`lf` = `load_factor()`.
+
+### G.1 CU simulator (`cu_kpi`)
+
+⚠ The CU uses **its own diurnal curve** — distinct from the DU curve (Appendix B.3) —
+and applies **no weekend factor**:
+
+```
+HOURLY_LOAD (CU/Core):
+0.08 0.06 0.05 0.05 0.06 0.12   0.30 0.65 0.85 0.80 0.70 0.65
+0.65 0.60 0.62 0.68 0.78 0.90   0.95 1.00 0.97 0.88 0.62 0.30
+```
+
+Domain: `du_ids = topo["cus"][CU_ID]["du_ids"]`;
+`total_max_ues` = Σ `max_ues` of every cell under those DUs (recomputed on topology change).
+
+```
+est_ues = int(total_max_ues · lf · U(0.88,1.05))
+load    = est_ues / total_max_ues
+```
+
+| Field | Formula |
+|---|---|
+| `du_count` | len(du_ids) |
+| `rrc_connected` | est_ues |
+| `rrc_idle` | int(est_ues · U(0.05,0.20)) |
+| `rrc_setup_rate` | int(U(5,40) · du_count) |
+| `inter_du_ho_rate` | int(U(1,10) · du_count) |
+| `pdcp_dl_gbps` | est_ues · U(1.2e-5, 6e-5) |
+| `pdcp_ul_gbps` | pdcp_dl_gbps · U(0.08,0.18) |
+| `f1_latency_ms` | U(0.3,2.5) — CU↔DU |
+| `n2_latency_ms` | U(1.0,8.0) — CU↔AMF |
+| `n3_latency_ms` | U(0.5,4.0) — CU↔UPF |
+| `e1_latency_ms` | U(0.1,1.0) — CU-CP↔CU-UP |
+| `cpu_pct` | 15 + load·55 + N(0,4) |
+| `memory_pct` | 25 + load·40 + N(0,2) |
+
+### G.2 Core simulator (`core_kpi`)
+
+Runs **independently of topology** (no `topology.json` dependency). Constants:
+`MAX_UES_TOTAL = 1,625,000` (≈50% of Bangalore's 13 M × 25% operator share),
+`IP_POOL_SIZE = 65536` (/16). Uses the same `HOURLY_LOAD` curve as G.1.
+Emits **three** `core_kpi` points per tick, tagged by `component`/`instance_id`
+(AMF-BLR-01, SMF-BLR-01, UPF-BLR-01).
+
+State (exponential smoothing across ticks):
+
+```
+init:  registered_ues  = int(MAX_UES_TOTAL · lf · 1.08)
+       active_sessions = int(registered_ues · 0.90)
+tick:  target_reg      = int(MAX_UES_TOTAL · lf · U(1.04,1.12))
+       registered_ues  = int(registered_ues·0.88 + target_reg·0.12)
+       active_sessions = int(registered_ues · U(0.84,0.96))
+       dl_gbps         = active_sessions · U(1.5e-5, 7e-5)
+       ul_gbps         = dl_gbps · U(0.08,0.16)
+```
+
+| Component | Field | Formula |
+|---|---|---|
+| AMF | `registered_ues` | state |
+| AMF | `active_sessions` | state |
+| AMF | `nas_msg_per_sec` | int(registered_ues · U(0.4,2.2)) |
+| AMF | `paging_per_sec` | int(U(5,80)) |
+| AMF | `handover_per_sec` | int(U(2,30)) |
+| AMF | `cpu_pct` | 20 + lf·55 + N(0,3) |
+| AMF | `memory_pct` | 28 + lf·42 + N(0,2) |
+| AMF | `n2_latency_ms` | U(1,9) |
+| SMF | `active_pdu_sessions` | active_sessions |
+| SMF | `session_setup_rate` | int(U(4,35)) |
+| SMF | `session_release_rate` | int(U(2,25)) |
+| SMF | `ip_pool_utilization_pct` | active_sessions / 65536 · 100 |
+| SMF | `cpu_pct` | 15 + lf·52 + N(0,4) |
+| SMF | `memory_pct` | 25 + lf·38 + N(0,2) |
+| SMF | `n4_latency_ms` | U(0.5,6) |
+| UPF | `dl_throughput_gbps` | dl_gbps |
+| UPF | `ul_throughput_gbps` | ul_gbps |
+| UPF | `active_tunnels` | active_sessions |
+| UPF | `packet_drop_rate` | U(0,0.0015) |
+| UPF | `gtp_encap_errors` | randint(0,5) |
+| UPF | `cpu_pct` | 25 + lf·60 + N(0,4) |
+| UPF | `memory_pct` | 35 + lf·35 + N(0,2) |
+
+---
+
+## Appendix H — KPI Agent Thresholds, SON Constants & Alert Vocabulary
+
+Source: `agents/kpi_agent/kpi_agent.py`. All thresholds are env-overridable; defaults shown.
+
+### H.1 Configuration constants
+
+| Constant | Env var | Default |
+|---|---|---|
+| `POLL_SEC` | `POLL_INTERVAL_SEC` | 10 (30 in Docker) |
+| `OVERLOAD_PRB` | `OVERLOAD_PRB_PCT` | 85 |
+| `UNDERLOAD_PRB` | `UNDERLOAD_PRB_PCT` | 20 |
+| `SINR_MIN_DB` | `SINR_MIN_DB` | 5 |
+| `POWER_WASTE_W` | `POWER_WASTE_W` | 500 |
+| `POWER_WASTE_UE` | `POWER_WASTE_MIN_UES` | 15 |
+| `MIN_CONFIDENCE` | `MIN_CONFIDENCE` | 0.70 |
+| `MODEL_PATH` | `MODEL_PATH` | kpi_model.pt |
+
+### H.2 Rule-based fallback (while window < `SEQ_LEN`), evaluated in order
+
+```
+if   prb_dl_pct > OVERLOAD_PRB                                  → OVERLOAD
+elif prb_dl_pct < UNDERLOAD_PRB                                 → UNDERLOAD
+elif sinr_db    < SINR_MIN_DB                                   → SINR_LOW
+elif power_w    > POWER_WASTE_W and connected_ues < POWER_WASTE_UE → POWER_WASTE
+else                                                           → NORMAL
+```
+
+Act gate: an action fires iff `source == "RULE"` **or** `confidence ≥ MIN_CONFIDENCE`.
+Cell KPIs are read from InfluxDB over `range(start: -3m)`, pivoted by field.
+DU load map `du_avg` = mean `prb_dl_pct` per DU across current cells.
+
+### H.3 SON actions per class
+
+| Class | Action |
+|---|---|
+| OVERLOAD | Pick least-loaded DU where `du ≠ current` **and** `du_avg < OVERLOAD_PRB − 20`. Move the cell only if `now − last_moved[cell] ≥ POLL_SEC·3` (cooldown). Writes alert WARNING(OVERLOAD) + INFO(LOAD_BALANCE) and son_action `LOAD_BALANCE`. |
+| UNDERLOAD | Alert INFO(UNDERLOAD); son_action `TRAFFIC_STEER` recommending handover to the min-PRB other DU (enable sleep/DTX). |
+| SINR_LOW | Alert CRITICAL(SINR_DEGRADATION); best-effort `POST /son/pci-reopt` on Controller (⚠ no such route exists → 404); son_action `PCI_REOPT_REQUEST`. |
+| POWER_WASTE | Alert WARNING(POWER_WASTE); son_action `DTX_RECOMMEND`, estimated saving = `power_w · 0.35` W. |
+
+### H.4 Alert & SON vocabularies
+
+`alerts` measurement (`alert_type` / `severity`):
+
+| `alert_type` | `severity` |
+|---|---|
+| OVERLOAD | WARNING |
+| LOAD_BALANCE | INFO |
+| UNDERLOAD | INFO |
+| SINR_DEGRADATION | CRITICAL |
+| POWER_WASTE | WARNING |
+
+⚠ The SINR alert's `alert_type` is **`SINR_DEGRADATION`**, not the model class name `SINR_LOW`.
+
+`son_actions` measurement (`action_type`): `LOAD_BALANCE`, `TRAFFIC_STEER`,
+`PCI_REOPT_REQUEST`, `DTX_RECOMMEND`.
+
+---
+
+## Appendix I — API Response Schemas
+
+Transcribed from the FastAPI route returns. Per-cell **cfg fields** = the `cells[*]`
+schema in Appendix A.3; **kpi** = the latest values of the relevant InfluxDB measurement.
+
+### I.1 Controller (`controller.py`)
+
+```jsonc
+// GET /network
+{
+  "cells": { "<cell_id>": { ...cfg, "du_id", "cu_id", "kpi": { ...latest cell_kpi } } },
+  "dus":   { "<du_id>":   { ...cfg, "kpi": { ...latest du_kpi } } },
+  "cus":   { "<cu_id>":   { ...cfg, "kpi": { ...latest cu_kpi } } },
+  "core":  { ...latest core_kpi keyed by component },
+  "topology_version": <int>,
+  "last_updated":     "<iso8601>"
+}
+
+// GET /cells?area=&du_id=&cu_id=   (filters optional)
+[ { ...cfg, "cell_id", "du_id", "cu_id", "kpi": { ...latest cell_kpi } }, ... ]
+
+// GET /cells/{cell_id}            (404 if unknown)
+{ ...cfg, "cell_id", "du_id", "cu_id",
+  "series": [ { "_time", ...pivoted cell_kpi fields }, ... ] }   // Flux range -30m, sorted by time
+
+// GET /dus   → [ { ...cfg, "du_id", "kpi": {...} }, ... ]
+// GET /cus   → [ { ...cfg, "cu_id", "kpi": {...} }, ... ]
+```
+
+`du_id`/`cu_id` are resolved live from `topology.json` (a cell's current DU is the one
+whose `cell_ids` contains it), so they reflect SON moves rather than the cell's static cfg.
+
+### I.2 Planning API (`planner_api.py`, `generate_plan`)
+
+```jsonc
+// POST /plan
+{
+  "plan_id":         "<8-char uuid>",
+  "timestamp":       "<iso8601>",
+  "geographic_area": "<str>",
+  "timing_sync":     "<IEEE-1588-PTP-Class-C|B|SyncE>",
+  "pci_violations":  [ "<str>", ... ],
+  "cells": [ { ...cell, "pci", "du_id", "cu_id",
+               "fronthaul_latency_us", "slices", "slice_warnings" } ],
+  "dus":   [ { "du_id", "cu_id", "cell_ids",
+               "centroid_lat", "centroid_lon", "midhaul_latency_ms" } ],
+  "cus":   [ { "cu_id", "du_ids", "centroid_lat", "centroid_lon" } ],
+  "summary": {
+    "n_cells", "n_dus", "n_cus", "total_capacity_ues",
+    "estimated_cost_usd", "budget_utilisation_pct",
+    "placement_method": "mip" | "heuristic"
+  },
+  "mip_placement": {                       // present only when use_mip=true
+    "status", "install_cost", "op_cost", "total_cost",
+    "build_schedule", "feasibility"
+  }
+}
+```
+
+`POST /plan/apply` (`ApplyRequest {plan_id}`) converts the stored plan via
+`plan_to_topology()` (Appendix A field mapping) and POSTs it to Controller
+`/topology/replace`. `GET /plan/{id}` returns the stored plan object above.
