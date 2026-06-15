@@ -180,6 +180,25 @@ class MoveDuRequest(BaseModel):
     to_cu_id:  str
 
 
+class AddCellRequest(BaseModel):
+    cell_id:        str
+    du_id:          str
+    area:           str
+    lat:            float
+    lon:            float
+    generation:     str = "5G"
+    band:           str = "n78"
+    freq_mhz:       int = 3500
+    pci:            int = 0
+    vendor:         str = "Nokia"
+    hardware_model: str = "AirScale MAA 64T64R"
+    antenna_config: str = "64T64R"
+    peak_dl_mbps:   int = 3800
+    tx_power_w:     int = 1000
+    idle_power_w:   int = 250
+    max_ues:        int = 900
+
+
 # ── API routes ───────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -358,6 +377,140 @@ def move_du(req: MoveDuRequest):
         "to_cu":   req.to_cu_id,
         "topology_version": topo["version"],
     }
+
+
+@app.post("/topology/replace")
+def replace_topology(new_topo: dict):
+    """
+    Replace the entire topology with the provided JSON.
+    Called by the Planning API's /plan/apply endpoint.
+    Validates presence of required top-level keys before writing.
+    """
+    required = {"cus", "dus", "cells"}
+    missing  = required - set(new_topo.keys())
+    if missing:
+        raise HTTPException(422, f"Topology missing required keys: {missing}")
+
+    # Preserve meta block from the current topology if not provided
+    try:
+        current = read_topology()
+        if "meta" not in new_topo:
+            new_topo["meta"] = current.get("meta", {})
+    except Exception:
+        pass
+
+    write_topology(new_topo, updated_by="planning-api:apply")
+    _record_event("topology_replace", {
+        "n_cells": len(new_topo.get("cells", {})),
+        "n_dus":   len(new_topo.get("dus", {})),
+        "n_cus":   len(new_topo.get("cus", {})),
+    })
+    return {
+        "status":           "ok",
+        "cells_deployed":   len(new_topo.get("cells", {})),
+        "dus_deployed":     len(new_topo.get("dus", {})),
+        "cus_deployed":     len(new_topo.get("cus", {})),
+        "topology_version": new_topo.get("version", 1),
+    }
+
+
+@app.get("/neighbors/{cell_id}")
+def get_neighbors(cell_id: str, max_neighbors: int = 6):
+    """
+    Return the N geographically closest cells to cell_id (excludes self).
+    Uses Haversine distance. Used by SON for ANR optimization.
+    """
+    import math
+
+    topo = read_topology()
+    if cell_id not in topo["cells"]:
+        raise HTTPException(404, f"Cell {cell_id} not found")
+
+    def haversine(lat1, lon1, lat2, lon2) -> float:
+        R    = 6371.0
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a    = (math.sin(dlat / 2) ** 2
+                + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+                * math.sin(dlon / 2) ** 2)
+        return R * 2 * math.asin(math.sqrt(a))
+
+    src  = topo["cells"][cell_id]
+    dists = []
+    for cid, cfg in topo["cells"].items():
+        if cid == cell_id:
+            continue
+        d = haversine(src["lat"], src["lon"], cfg["lat"], cfg["lon"])
+        dists.append({"cell_id": cid, "distance_km": round(d, 3), **cfg})
+
+    dists.sort(key=lambda x: x["distance_km"])
+    return {"cell_id": cell_id, "neighbors": dists[:max_neighbors]}
+
+
+@app.post("/cells/add")
+def add_cell(req: AddCellRequest):
+    """
+    Add a new cell to the topology and assign it to the specified DU.
+    Auto-assigns a PCI if pci=0 (picks the next available PCI not in use).
+    """
+    topo = read_topology()
+
+    if req.cell_id in topo["cells"]:
+        raise HTTPException(409, f"Cell {req.cell_id} already exists")
+    if req.du_id not in topo["dus"]:
+        raise HTTPException(404, f"DU {req.du_id} not found")
+
+    # Auto-assign PCI if not provided
+    pci = req.pci
+    if pci == 0:
+        used_pcis = {c["pci"] for c in topo["cells"].values()}
+        pci = next(p for p in range(1, 1024) if p not in used_pcis)
+
+    topo["cells"][req.cell_id] = {
+        "area":           req.area,
+        "lat":            req.lat,
+        "lon":            req.lon,
+        "generation":     req.generation,
+        "band":           req.band,
+        "freq_mhz":       req.freq_mhz,
+        "pci":            pci,
+        "vendor":         req.vendor,
+        "hardware_model": req.hardware_model,
+        "antenna_config": req.antenna_config,
+        "peak_dl_mbps":   req.peak_dl_mbps,
+        "tx_power_w":     req.tx_power_w,
+        "idle_power_w":   req.idle_power_w,
+        "max_ues":        req.max_ues,
+    }
+    topo["dus"][req.du_id]["cell_ids"].append(req.cell_id)
+    write_topology(topo, updated_by=f"add_cell:{req.cell_id}")
+    _record_event("cell_add", {"cell_id": req.cell_id, "du_id": req.du_id,
+                               "band": req.band, "pci": pci})
+    return {
+        "status":  "ok",
+        "cell_id": req.cell_id,
+        "pci":     pci,
+        "du_id":   req.du_id,
+        "topology_version": topo["version"],
+    }
+
+
+@app.delete("/cells/{cell_id}")
+def remove_cell(cell_id: str):
+    """Remove a cell from topology. The cell's DU reconfigures within TOPO_POLL_SEC."""
+    topo = read_topology()
+    if cell_id not in topo["cells"]:
+        raise HTTPException(404, f"Cell {cell_id} not found")
+
+    du_id = next((d for d, v in topo["dus"].items() if cell_id in v["cell_ids"]), None)
+    if du_id:
+        topo["dus"][du_id]["cell_ids"].remove(cell_id)
+    del topo["cells"][cell_id]
+
+    write_topology(topo, updated_by=f"remove_cell:{cell_id}")
+    _record_event("cell_remove", {"cell_id": cell_id, "du_id": du_id or "none"})
+    return {"status": "ok", "cell_id": cell_id, "removed_from_du": du_id,
+            "topology_version": topo["version"]}
 
 
 if __name__ == "__main__":

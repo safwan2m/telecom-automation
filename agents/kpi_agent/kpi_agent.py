@@ -87,7 +87,9 @@ from(bucket: "{INFLUX_BUCKET}")
   |> filter(fn: (r) => r._measurement == "cell_kpi")
   |> filter(fn: (r) => r._field == "prb_dl_pct" or r._field == "sinr_db"
                     or r._field == "connected_ues" or r._field == "power_w"
-                    or r._field == "packet_loss_pct" or r._field == "dl_throughput_mbps")
+                    or r._field == "packet_loss_pct" or r._field == "dl_throughput_mbps"
+                    or r._field == "cqi" or r._field == "bler_pct"
+                    or r._field == "latency_ms")
   |> last()
   |> pivot(rowKey: ["cell_id","area","du_id","cu_id"],
            columnKey: ["_field"], valueColumn: "_value")
@@ -108,6 +110,9 @@ from(bucket: "{INFLUX_BUCKET}")
                     "power_w":             float(v.get("power_w",             0) or 0),
                     "packet_loss_pct":     float(v.get("packet_loss_pct",     0) or 0),
                     "dl_throughput_mbps":  float(v.get("dl_throughput_mbps",  0) or 0),
+                    "cqi":                 float(v.get("cqi",                10) or 10),
+                    "bler_pct":            float(v.get("bler_pct",          1.0) or 1.0),
+                    "latency_ms":          float(v.get("latency_ms",        15.0) or 15.0),
                 })
         return rows
     except Exception as e:
@@ -156,6 +161,9 @@ def extract_features(c: dict) -> list[float]:
         c["power_w"],
         c["packet_loss_pct"],
         c["dl_throughput_mbps"],
+        float(c.get("cqi", 10)),          # default 10 if not yet in InfluxDB
+        float(c.get("bler_pct", 1.0)),
+        float(c.get("latency_ms", 15.0)),
     ]
 
 
@@ -172,6 +180,41 @@ def infer(model: KPIClassifier, buf: deque) -> tuple[int, float]:
     cls  = probs.argmax().item()
     conf = probs[cls].item()
     return cls, conf
+
+
+# Per-cell cooldown: prevents re-moving a cell before InfluxDB reflects the change
+_last_moved: dict[str, float] = {}
+
+# ── SON helper actions ────────────────────────────────────────────────────────
+
+def _write_son_action(write_api, cell_id: str, du_id: str,
+                      action_type: str, message: str, confidence: float) -> None:
+    """Record a SON corrective action to InfluxDB for audit + dashboard visibility."""
+    try:
+        p = (Point("son_actions")
+             .tag("cell_id",     cell_id)
+             .tag("du_id",       du_id)
+             .tag("action_type", action_type)
+             .field("message",    message)
+             .field("confidence", confidence))
+        write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=[p])
+        log.info("[SON] %s → %s: %s", action_type, cell_id, message[:80])
+    except Exception as e:
+        log.warning("SON action write failed: %s", e)
+
+
+def _request_pci_reopt(cell_id: str, du_id: str) -> None:
+    """Ask the Planning API to validate PCI assignments (non-blocking best-effort)."""
+    try:
+        r = httpx.post(
+            f"{CONTROLLER_URL}/son/pci-reopt",
+            json={"cell_id": cell_id, "du_id": du_id},
+            timeout=3.0,
+        )
+        if r.status_code == 200:
+            log.info("[SON] PCI re-opt request accepted for %s", cell_id)
+    except Exception:
+        pass   # best-effort; controller endpoint may not exist yet
 
 
 # ── Main analysis cycle ───────────────────────────────────────────────────────
@@ -236,12 +279,24 @@ def analyse(model: KPIClassifier,
                         candidate = du_id
                         break
                 if candidate:
-                    moved   = move_cell(cell_id, candidate)
-                    action  = f"moved to {candidate}" if moved else "auto-move failed"
-                    write_alert(write_api, "INFO", cell_id, c["du_id"],
-                                "LOAD_BALANCE",
-                                f"[{source}] Load-balance action: {action}",
-                                c["prb_dl_pct"], OVERLOAD_PRB, conf)
+                    cooldown = POLL_SEC * 3
+                    now = time.time()
+                    if now - _last_moved.get(cell_id, 0) >= cooldown:
+                        moved = move_cell(cell_id, candidate)
+                        if moved:
+                            _last_moved[cell_id] = now
+                        action = f"moved to {candidate}" if moved else "auto-move failed"
+                        write_alert(write_api, "INFO", cell_id, c["du_id"],
+                                    "LOAD_BALANCE",
+                                    f"[{source}] Load-balance action: {action}",
+                                    c["prb_dl_pct"], OVERLOAD_PRB, conf)
+                        _write_son_action(
+                            write_api, cell_id, c["du_id"], "LOAD_BALANCE",
+                            f"[SON] OVERLOAD: {action} (PRB {c['prb_dl_pct']:.1f}%)",
+                            conf,
+                        )
+                    else:
+                        log.info("Skipping move for %s — cooldown active", cell_id)
 
         elif cls == 2:  # UNDERLOAD
             underload += 1
@@ -251,6 +306,17 @@ def analyse(model: KPIClassifier,
                             f"[{source}] Low utilisation — sleep candidate "
                             f"(PRB {c['prb_dl_pct']:.1f}%)",
                             c["prb_dl_pct"], UNDERLOAD_PRB, conf)
+                # SON: recommend handing remaining UEs to lightest other DU to enable sleep/DTX
+                other_dus = {d: v for d, v in du_avg.items() if d != c["du_id"]}
+                if other_dus:
+                    candidate_du = min(other_dus, key=lambda d: other_dus[d])
+                    _write_son_action(
+                        write_api, cell_id, c["du_id"], "TRAFFIC_STEER",
+                        f"[SON] UNDERLOAD: recommend handing over remaining UEs from {cell_id} "
+                        f"(PRB {c['prb_dl_pct']:.1f}%) to cells on {candidate_du} "
+                        f"(PRB {other_dus[candidate_du]:.1f}%) to enable sleep/DTX mode",
+                        conf,
+                    )
 
         elif cls == 3:  # SINR_LOW
             sinr_low += 1
@@ -259,6 +325,14 @@ def analyse(model: KPIClassifier,
                             "SINR_DEGRADATION",
                             f"[{source}] SINR {c['sinr_db']:.1f} dB — interference suspected",
                             c["sinr_db"], SINR_MIN_DB, conf)
+                # SON action: request PCI re-optimisation via planning API to reduce co-channel interference
+                _request_pci_reopt(cell_id, c["du_id"])
+                _write_son_action(
+                    write_api, cell_id, c["du_id"], "PCI_REOPT_REQUEST",
+                    f"[SON] SINR_LOW {c['sinr_db']:.1f} dB: triggered PCI re-optimisation "
+                    f"request for {cell_id} to reduce co-channel interference",
+                    conf,
+                )
 
         elif cls == 4:  # POWER_WASTE
             pwr_waste += 1
@@ -267,6 +341,14 @@ def analyse(model: KPIClassifier,
                             "POWER_WASTE",
                             f"[{source}] {c['power_w']:.0f}W with {int(c['connected_ues'])} UEs",
                             c["power_w"], POWER_WASTE_W, conf)
+                # SON action: recommend DTX (Discontinuous Transmission) / sleep mode
+                _write_son_action(
+                    write_api, cell_id, c["du_id"], "DTX_RECOMMEND",
+                    f"[SON] POWER_WASTE: {c['power_w']:.0f}W with only "
+                    f"{int(c['connected_ues'])} UEs — recommend DTX/sleep mode "
+                    f"(estimated saving: {c['power_w'] * 0.35:.0f}W)",
+                    conf,
+                )
 
         buf_fill = len(buffers[cell_id])
         if not has_history and buf_fill < SEQ_LEN:
