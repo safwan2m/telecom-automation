@@ -21,7 +21,7 @@ Project phase: Development <!-- Production planning will be done later. -->
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │               Orchestrator Agent  :8082                      │
-│          Gemini 2.5 Flash  +  tool-calling (streaming)       │
+│       LLM backend (Gemini / Claude CLI)  +  tool-calling     │
 └────────┬───────────────┬───────────────┬─────────────────────┘
          │               │               │
   ┌──────▼──────┐  ┌─────▼──────┐  ┌────▼──────────┐
@@ -84,7 +84,22 @@ Project phase: Development <!-- Production planning will be done later. -->
 
 ### Agent 1 — LLM Orchestrator (`agents/orchestrator/`)
 
-FastAPI service on port 8082 powered by **Gemini 2.5 Flash** via the `google-genai` SDK. Accepts natural-language operator commands over HTTP, drives a multi-step tool-calling loop, and streams the response back in real time.
+FastAPI service on port 8082. Accepts natural-language operator commands over HTTP, drives a multi-step tool-calling loop, and streams the response back in real time. Supports two LLM backends selected at startup.
+
+#### Backend selection
+
+Backend is determined by the `CLAUDE_CLI_PATH` env var at startup:
+
+| Condition | Backend | Active in Docker? |
+|---|---|---|
+| `CLAUDE_CLI_PATH` non-empty | Claude CLI | **Yes** — docker-compose sets `/usr/bin/claude` |
+| `CLAUDE_CLI_PATH` empty/unset | Gemini | Only if `CLAUDE_CLI_PATH` is explicitly unset |
+
+**Claude CLI backend** (`CLAUDE_CLI_PATH` non-empty): spawns the `claude -p` process via `CustomAnthropicClient`. `TOOL_SCHEMAS` are passed as-is (already in Anthropic native format — no translation needed). Model selected via `ANTHROPIC_MODEL_NAME` (default: `sonnet`). Session history stored as `_claude_sessions: dict[str, list[{"role", "content"}]]`.
+
+**Gemini backend** (`CLAUDE_CLI_PATH` empty): uses `google-genai` SDK, requires `GOOGLE_API_KEY`. Tool schemas translated from Anthropic-style JSON to Gemini `function_declarations` at startup via `_clean_params()`. Model selected via `GEMINI_MODEL` (code default: `gemini-2.0-flash`; docker-compose overrides to `gemini-2.5-flash`). Session history stored as `_gemini_sessions: dict[str, list[types.Content]]`.
+
+`GET /health` returns `{"status": "ok", "model": "<name>", "backend": "gemini"|"claude-cli"}`.
 
 #### Request / Response flow
 
@@ -136,12 +151,10 @@ Multiple tools can be called per response (Gemini may batch them); all are execu
 
 #### Tool schema translation
 
-`tools.py` stores all 13 tool schemas in **Anthropic-style JSON** (`name`, `description`, `input_schema` with JSON Schema `properties`). At startup, `orchestrator.py` translates these to Gemini's `function_declarations` format via `_clean_params()`, which:
-- Strips `default` fields — Gemini rejects them in parameter schemas
-- Removes empty `enum` arrays — Gemini rejects them (arises from the `""` sentinel in `severity` enum)
-- Uses `copy.deepcopy` to avoid mutating the original `TOOL_SCHEMAS` used elsewhere
+`tools.py` stores all 13 tool schemas in **Anthropic-style JSON** (`name`, `description`, `input_schema` with JSON Schema `properties`).
 
-The `GEMINI_TOOLS` list has the structure `[{"function_declarations": [...]}]` as required by the Gemini API.
+- **Claude CLI backend**: schemas used as-is — no translation needed.
+- **Gemini backend**: `_clean_params()` strips `default` fields (Gemini rejects them), removes empty `enum` arrays (arises from the `""` sentinel in `severity` enum), and deep-copies to avoid mutating `TOOL_SCHEMAS`. Produces `GEMINI_TOOLS = [{"function_declarations": [...]}]`.
 
 #### Tool inventory
 
@@ -163,11 +176,10 @@ The `GEMINI_TOOLS` list has the structure `[{"function_declarations": [...]}]` a
 
 #### Session management
 
-- In-memory `_sessions: dict[str, list[types.Content]]` — one entry per `session_id`
-- Each session stores the full conversation as `types.Content` objects (Gemini's native format preserving role, text, and function call/response parts)
-- Multiple sessions coexist independently (e.g. `default`, `ops-team`, `map-abc1234`)
+- Two in-memory session stores: `_gemini_sessions` (list of `types.Content`) and `_claude_sessions` (list of `{"role", "content"}` dicts) — one is active depending on the backend
+- Multiple sessions coexist independently per `session_id` (e.g. `default`, `ops-team`, `map-abc1234`)
 - `DELETE /history` clears a session; sessions are lost on container restart (no persistence)
-- `GET /history` normalises the internal `types.Content` list into plain `{"role", "content"}` dicts for external consumers (tool calls shown as `[Calling name]`, results as `[Tool result: name]`)
+- `GET /history` normalises either session format into flat `{"role", "content"}` dicts; tool calls shown as `[Calling name]`, results as `[Tool result: name]`
 
 #### Streaming
 
@@ -182,8 +194,10 @@ The `GEMINI_TOOLS` list has the structure `[{"function_declarations": [...]}]` a
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `GOOGLE_API_KEY` | required | Gemini API authentication |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Model name passed to `generate_content` |
+| `CLAUDE_CLI_PATH` | `""` (Gemini) / `/usr/bin/claude` (Docker) | Path to `claude` binary; non-empty activates Claude CLI backend |
+| `ANTHROPIC_MODEL_NAME` | `sonnet` | Claude model alias (Claude CLI backend only) |
+| `GOOGLE_API_KEY` | required (Gemini only) | Gemini API authentication |
+| `GEMINI_MODEL` | `gemini-2.0-flash` (code) / `gemini-2.5-flash` (Docker) | Gemini model name (Gemini backend only) |
 | `CONTROLLER_URL` | `http://controller:8080` | Context injection + move_cell / move_du tools |
 | `PLANNING_URL` | `http://planning-api:8081` | plan_network / apply_plan tools |
 | `INFLUX_URL` | `http://influxdb:8086` | get_alerts / query_ue / get_son_status (direct Flux queries) |
@@ -217,7 +231,7 @@ On startup it calls `GET /health` and prints a banner showing the active model n
 | `/ue` | Expands → *"Show me UE usage and mobility events from the last 30 minutes."* |
 | `/history` | `GET /history?session_id=...` — prints past turns (role + first 200 chars) |
 | `/clear` | `DELETE /history?session_id=...` — resets server-side conversation |
-| `/tools` | `GET /tools` — lists all 13 available agent tools with short descriptions |
+| `/tools` | `GET /tools` — lists all available agent tools with short descriptions |
 | `quit` / `exit` / `q` | Exits the CLI |
 
 Any other input is sent as-is to `POST /chat` with the current `session_id`.
@@ -392,7 +406,8 @@ Subject to:
 | Env var | Default | Purpose |
 |---|---|---|
 | `CONTROLLER_URL` | `http://controller:8080` | `plan/apply` posts topology to Controller |
-| `MIP_TIME_LIMIT_SEC` | `120` | CBC solver timeout before heuristic fallback |
+
+`mip_time_limit_sec` (default 120 s) is a **request field** on `POST /plan` and `POST /plan/multi-period`, not a container env var.
 
 #### Routes
 
@@ -439,7 +454,7 @@ main()
   │     └── loads kpi_model.pt if exists; else trains from scratch via train.py
   │         and saves weights before returning
   │
-  ├─► connect_influx()  (retries up to 20 × 6 s)
+  ├─► connect_influx()  (up to 19 attempts × 6 s delay)
   │
   └─► loop every POLL_SEC:
         │
@@ -544,12 +559,14 @@ All Orchestrator proxy routes return HTTP 503 if the Orchestrator is unreachable
 
 #### Coverage radius computation
 
-`compute_coverage_radius_m(band, tx_power_w, generation, antenna_config)` implements the **COST-231-Hata** urban macro model:
+`compute_coverage_radius_m(band, tx_power_w, generation, antenna_config)` implements the **COST-231-Hata** urban macro model (hb=25 m, hm=1.5 m, dense-urban +3 dB correction, UE NF=7 dB, edge SNR=−3 dB):
 
-1. Map band to carrier frequency (MHz)
-2. Compute path loss at candidate distance using Hata formula for urban environments
-3. Binary-search the distance at which received power equals the receiver sensitivity threshold
-4. Scale for antenna gain: 64T64R adds beamforming gain (~18 dBi effective); 4T4R adds ~12 dBi
+1. Convert `tx_power_w` to RF power using generation efficiency (`5G: 22%`, `4G: 32%`)
+2. Compute EIRP (dBm) = 10·log₁₀(rf_w × 1000) + antenna\_gain
+3. Compute max allowable path loss: EIRP − (thermal\_noise − edge\_SNR) − penetration\_loss
+4. Directly invert the COST-231-Hata formula: `d_km = 10^((pl_max − A) / B)`, return `d_km × 1000` m
+
+Antenna gain constants: `64T64R = 24.0 dBi`, `4T4R = 17.0 dBi`. Live `coverage_radius_m` from KPI telemetry is preferred when it is within 2× of the model estimate.
 
 #### Configuration
 
@@ -645,7 +662,7 @@ Five dashboards provisioned via `grafana/provisioning/dashboards/default.yaml`:
 
 ### Phase 3 — Deployment Agent ✅ COMPLETE
 - [x] Topology manifest generation from planning outputs (topology.json format)
-- [x] Health-check: Controller validates DU/CU acknowledgement via topology polling
+- [x] Topology propagation: Controller writes atomically to `topology.json`; DU/CU simulators poll every `TOPO_POLL_SEC` (5 s) and reconfigure live — no explicit acknowledgement needed
 - [x] **`POST /topology/replace`** added to Controller — `plan/apply` now deploys plans live
 - [x] **`plan_to_topology()` fixed** — vendor, hardware_model, generation, antenna_config, tx_power_w, idle_power_w, peak_dl_mbps propagated through CANDIDATE_CELLS and preserved
 - [x] **`POST /cells/add`** — conversational single-cell deployment via `add_cell` orchestrator tool
@@ -730,7 +747,7 @@ Input may be partial — the system will flag missing required fields or redunda
 | RAN hardware | Docker containers simulating RU/DU/CU (dev); Nokia, Ericsson, Samsung, ZTE equipment specs (25% each); real O-RAN targets (prod) |
 | KPI data source | Synthetic telemetry from DU/CU/Core simulators using real hardware specs (peak_dl_mbps, tx_power_w, band-specific SINR/RSRP) → InfluxDB |
 | Geographic area | Malleswaram, North Bangalore — 30 cells across 10 macro sites; 40% operator share; active_ues_peak = 18,400 (40,000 residents + 15% commuter overhead × 40% market share) |
-| LLM backend | Gemini API (gemini-2.5-flash) via `google-genai` SDK; configurable via `GEMINI_MODEL` env var |
+| LLM backend | Claude CLI (primary, active in Docker); Gemini API fallback when `CLAUDE_CLI_PATH` is unset. Both use the same 13-tool schema in Anthropic format. |
 | RAN mode | 4G/5G NSA — LTE anchor + 5G NR secondary; shared AMF/SMF/UPF core |
 | 5G architecture | Split CU/DU/RU throughout (planning engine groups DUs under CUs by proximity) |
 | 4G architecture | 4G cell connected to 5G L2/L3 |
@@ -769,7 +786,7 @@ POST /chat           {"message", "session_id"}  → text/plain (streaming)
 GET  /history?session_id=
 DELETE /history?session_id=
 GET  /tools          → [{"name", "description"}]  (13 tools)
-GET  /health         → {"status": "ok", "model": "gemini-2.5-flash"}
+GET  /health         → {"status": "ok", "model": "<name>", "backend": "gemini"|"claude-cli"}
 ```
 
 **Map Server (:8083)**

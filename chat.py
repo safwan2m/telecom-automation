@@ -11,6 +11,9 @@ Commands (type in the chat):
     /status     - quick network status
     /alerts     - show recent KPI alerts
     /cells      - list all cells
+    /plan       - generate a network plan
+    /son        - show recent SON autonomous actions
+    /ue         - show UE usage and mobility events
     /history    - print conversation history
     /clear      - reset conversation
     /tools      - list available agent tools
@@ -62,8 +65,10 @@ def delete(url: str) -> str:
 SHORTCUTS = {
     "/status":  "What is the current status of all cells, DUs, and CUs? Summarise in a table.",
     "/alerts":  "Show me all recent KPI alerts from the last 60 minutes.",
-    "/cells":   "List all 14 cells with their current connected UEs, PRB utilisation, and which DU they belong to.",
-    "/plan":    "Generate a network plan for Bangalore with default parameters and show me the summary.",
+    "/cells":   "List all cells with their current connected UEs, PRB utilisation, and DU assignment.",
+    "/plan":    "Generate a network plan for Malleswaram with default parameters and show me a summary.",
+    "/son":     "Show me the recent SON autonomous actions and their outcomes.",
+    "/ue":      "Show me UE usage and mobility events from the last 30 minutes.",
 }
 
 
@@ -81,7 +86,7 @@ def main():
         print(f"\n  WARNING: Orchestrator may not be running at {base}")
         print(f"  Response: {health}\n")
 
-    print("  Type a message or a shortcut (/status /alerts /cells /plan)")
+    print("  Type a message or a shortcut (/status /alerts /cells /plan /son /ue)")
     print("  /history  /clear  /tools  |  quit to exit")
     print("  " + "─" * 60 + "\n")
 
