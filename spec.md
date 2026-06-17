@@ -718,6 +718,25 @@ Five dashboards provisioned via `grafana/provisioning/dashboards/default.yaml`:
 ### Future / Outsource
 - [ ] Replace the custom tool-schema layer in `tools.py` with an MCP server so any MCP-compatible LLM (Claude, Gemini, GPT-4o) can discover and call the orchestrator tools without per-provider translation.
 
+### Open Gaps
+
+Code-verified issues as of the current branch:
+
+| Item | Location | Impact |
+|---|---|---|
+| `/son/pci-reopt` not implemented | KPI agent calls `CONTROLLER_URL/son/pci-reopt` at `kpi_agent.py:237` (called at line 395); Controller has no such route | SINR_LOW SON action always 404s; `PCI_REOPT_REQUEST` is logged but PCI re-optimisation never executes |
+| `n28` vestigial | Excluded from deployment yet still present in `_BAND_PARAMS`, `_SINR_BASE`, `_RSRP_BASE`, and `PlanRequest` default `spectrum_bands=["n78","n28"]` | Decide: keep as "supported but unused" or remove from all planner defaults and candidate sites |
+| RACH procedures not modelled | `du_simulator.py` | UEs jump pool→connected with no preamble/RAR/MSG3/MSG4 contention — acceptable for this simulation scope but would diverge from real RAN behaviour |
+
+### Success Criteria
+
+- Planning engine produces a conflict-free plan in < 30 s.
+- Plan apply propagates to all DU/CU containers within 10 s (5 s poll cadence + write overhead).
+- KPI agent detects and responds to overload within 2 polling cycles (60 s at 30 s Docker cadence).
+- Orchestrator correctly routes ≥ 90% of operator commands in manual testing.
+- All 30 cells stream data with zero gaps in the demo scenario.
+- Map page loads and renders all 30 cells with live KPIs within 5 s of controller startup.
+
 ---
 
 ## Reference
