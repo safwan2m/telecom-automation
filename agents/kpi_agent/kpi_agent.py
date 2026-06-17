@@ -51,6 +51,10 @@ POWER_WASTE_UE = int(os.environ.get("POWER_WASTE_MIN_UES", "15"))
 # Minimum model confidence to act (below this, log but don't act)
 MIN_CONFIDENCE = float(os.environ.get("MIN_CONFIDENCE", "0.70"))
 
+# Anti-thrashing: min seconds between SON actions on the same cell
+COOLDOWN_SEC = int(os.environ.get("SON_COOLDOWN_SEC", "300"))
+_cell_cooldown: dict[str, float] = {}   # cell_id → last action timestamp
+
 # ── Model bootstrap ───────────────────────────────────────────────────────────
 
 def load_or_train() -> KPIClassifier:
@@ -151,6 +155,29 @@ def move_cell(cell_id: str, to_du_id: str) -> bool:
     return False
 
 
+# ── Congestion scoring ───────────────────────────────────────────────────────
+
+def congestion_score(c: dict) -> float:
+    """Multi-factor congestion score 0–1 (higher = worse).
+
+    Weights: PRB 40% · SINR-inverse 20% · BLER 20% · latency 20%.
+    Thresholds: SINR 25 dB = no contribution; BLER 20% = max; latency 150 ms = max.
+    """
+    prb     = min(c["prb_dl_pct"] / 100.0, 1.0)
+    sinr    = max(0.0, 1.0 - c["sinr_db"] / 25.0)
+    bler    = min(float(c.get("bler_pct", 1.0)) / 20.0, 1.0)
+    latency = min(float(c.get("latency_ms", 15.0)) / 150.0, 1.0)
+    return round(0.40 * prb + 0.20 * sinr + 0.20 * bler + 0.20 * latency, 3)
+
+
+def _is_cooling_down(cell_id: str) -> bool:
+    return time.time() - _cell_cooldown.get(cell_id, 0.0) < COOLDOWN_SEC
+
+
+def _mark_action(cell_id: str) -> None:
+    _cell_cooldown[cell_id] = time.time()
+
+
 # ── Feature extraction ────────────────────────────────────────────────────────
 
 def extract_features(c: dict) -> list[float]:
@@ -225,7 +252,8 @@ def analyse(model: KPIClassifier,
             write_api,
             cycle: int) -> None:
 
-    # Build DU load map for overload rebalancing
+    # Fast lookup maps for this cycle
+    cell_kpi_map = {c["cell_id"]: c for c in cells}
     du_prb: dict[str, list[float]] = defaultdict(list)
     for c in cells:
         du_prb[c["du_id"]].append(c["prb_dl_pct"])
@@ -264,39 +292,77 @@ def analyse(model: KPIClassifier,
 
         if cls == 0:
             normal += 1
+            # Proactive: flag cells trending toward congestion before LSTM detects OVERLOAD
+            score = congestion_score(c)
+            if score > 0.65 and not _is_cooling_down(cell_id):
+                _write_son_action(
+                    write_api, cell_id, c["du_id"], "PRE_EMPTIVE_STEER",
+                    f"[SON] PRE-EMPTIVE {cell_id} score={score:.2f} still NORMAL "
+                    f"but trending — PRB {c['prb_dl_pct']:.1f}% "
+                    f"BLER {c.get('bler_pct', 1):.1f}% "
+                    f"latency {c.get('latency_ms', 15):.0f}ms",
+                    conf,
+                )
+                _mark_action(cell_id)
 
         elif cls == 1:  # OVERLOAD
             overload += 1
-            if act:
-                msg = (f"[{source}] OVERLOAD — PRB {c['prb_dl_pct']:.1f}% "
-                       f"over {SEQ_LEN * POLL_SEC}s window")
+            if act and not _is_cooling_down(cell_id):
+                score = congestion_score(c)
+                msg = (f"[{source}] OVERLOAD score={score:.2f} — "
+                       f"PRB {c['prb_dl_pct']:.1f}% "
+                       f"BLER {c.get('bler_pct', 1):.1f}% "
+                       f"latency {c.get('latency_ms', 15):.0f}ms")
                 write_alert(write_api, "WARNING", cell_id, c["du_id"],
                             "OVERLOAD", msg, c["prb_dl_pct"], OVERLOAD_PRB, conf)
-                # Find least-loaded DU to absorb the cell
-                candidate = None
-                for du_id, avg in sorted(du_avg.items(), key=lambda x: x[1]):
-                    if du_id != c["du_id"] and avg < OVERLOAD_PRB - 20:
-                        candidate = du_id
-                        break
-                if candidate:
-                    cooldown = POLL_SEC * 3
-                    now = time.time()
-                    if now - _last_moved.get(cell_id, 0) >= cooldown:
-                        moved = move_cell(cell_id, candidate)
-                        if moved:
-                            _last_moved[cell_id] = now
+
+                # 1st choice: steer to least-loaded NEIGHBOR (inexpensive, no topology change)
+                neighbor_steered = False
+                try:
+                    resp = httpx.get(
+                        f"{CONTROLLER_URL}/neighbors/{cell_id}", timeout=3.0
+                    )
+                    neighbors = resp.json().get("neighbors", [])
+                    best_nbr, best_prb = None, 999.0
+                    for n in neighbors:
+                        nid = n.get("cell_id")
+                        if nid and nid in cell_kpi_map:
+                            nprb = cell_kpi_map[nid]["prb_dl_pct"]
+                            if nprb < OVERLOAD_PRB - 25 and nprb < best_prb:
+                                best_nbr, best_prb = nid, nprb
+                    if best_nbr:
+                        _write_son_action(
+                            write_api, cell_id, c["du_id"], "NEIGHBOR_LOAD_STEER",
+                            f"[SON] OVERLOAD on {cell_id} (PRB {c['prb_dl_pct']:.1f}%): "
+                            f"steer excess load to neighbor {best_nbr} "
+                            f"(PRB {best_prb:.1f}% — {OVERLOAD_PRB - best_prb:.0f}% headroom)",
+                            conf,
+                        )
+                        neighbor_steered = True
+                        _mark_action(cell_id)
+                except Exception:
+                    pass
+
+                # 2nd choice: DU move — only when score is severe OR no neighbor has headroom
+                if not neighbor_steered and score > 0.75:
+                    candidate = None
+                    for du_id, avg in sorted(du_avg.items(), key=lambda x: x[1]):
+                        if du_id != c["du_id"] and avg < OVERLOAD_PRB - 20:
+                            candidate = du_id
+                            break
+                    if candidate:
+                        moved  = move_cell(cell_id, candidate)
                         action = f"moved to {candidate}" if moved else "auto-move failed"
                         write_alert(write_api, "INFO", cell_id, c["du_id"],
                                     "LOAD_BALANCE",
-                                    f"[{source}] Load-balance action: {action}",
+                                    f"[{source}] Load-balance: {action}",
                                     c["prb_dl_pct"], OVERLOAD_PRB, conf)
                         _write_son_action(
                             write_api, cell_id, c["du_id"], "LOAD_BALANCE",
-                            f"[SON] OVERLOAD: {action} (PRB {c['prb_dl_pct']:.1f}%)",
+                            f"[SON] Severe OVERLOAD score={score:.2f}: {action}",
                             conf,
                         )
-                    else:
-                        log.info("Skipping move for %s — cooldown active", cell_id)
+                        _mark_action(cell_id)
 
         elif cls == 2:  # UNDERLOAD
             underload += 1

@@ -26,6 +26,7 @@ from google import genai
 from google.genai import types
 
 import tools as T
+from langsmith import traceable, trace as ls_trace
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -122,6 +123,18 @@ GEMINI_TOOLS = [{
 }]
 
 
+# ── LangSmith — Gemini LLM span ──────────────────────────────────────────────
+
+@traceable(run_type="llm", name="gemini.generate_content")
+def _call_gemini(contents: list, config) -> object:
+    """Thin wrapper so each Gemini API call appears as an LLM span in LangSmith."""
+    return gemini.models.generate_content(
+        model=MODEL_NAME,
+        contents=contents,
+        config=config,
+    )
+
+
 # ── Context injection ─────────────────────────────────────────────────────────
 
 def build_network_context() -> str:
@@ -147,17 +160,22 @@ def execute_tool(name: str, args: dict) -> dict:
     fn = T.TOOL_MAP.get(name)
     if fn is None:
         return {"error": f"Unknown tool: {name}"}
-    try:
-        result = fn(args)
-        if not isinstance(result, dict):
-            result = {"result": result}
-        return json.loads(json.dumps(result, default=str))
-    except Exception as e:
-        return {"error": str(e)}
+    with ls_trace(name=name, run_type="tool", inputs={"args": args}) as run:
+        try:
+            result = fn(args)
+            if not isinstance(result, dict):
+                result = {"result": result}
+            result = json.loads(json.dumps(result, default=str))
+            run.end(outputs=result)
+            return result
+        except Exception as e:
+            run.end(error=str(e))
+            return {"error": str(e)}
 
 
 # ── Gemini chat turn ──────────────────────────────────────────────────────────
 
+@traceable(run_type="chain", name="chat/gemini")
 def chat_turn_gemini(session_id: str, user_message: str):
     """Run one full Gemini turn (including tool loops) and yield text chunks."""
     history = _gemini_sessions.setdefault(session_id, [])
@@ -174,11 +192,7 @@ def chat_turn_gemini(session_id: str, user_message: str):
 
     try:
         while True:
-            response = gemini.models.generate_content(
-                model=MODEL_NAME,
-                contents=history,
-                config=config,
-            )
+            response = _call_gemini(history, config)
 
             model_content = response.candidates[0].content
             history.append(model_content)
@@ -221,6 +235,7 @@ def chat_turn_gemini(session_id: str, user_message: str):
 
 # ── Claude CLI chat turn ──────────────────────────────────────────────────────
 
+@traceable(run_type="chain", name="chat/claude")
 def chat_turn_claude(session_id: str, user_message: str):
     """Run one full Claude CLI turn (including tool loops) and yield text chunks."""
     history = _claude_sessions.setdefault(session_id, [])

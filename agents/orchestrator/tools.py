@@ -61,6 +61,32 @@ def _influx_query(flux: str) -> list[dict]:
 
 # ── Tool implementations ─────────────────────────────────────────────────────
 
+def optimize_congestion(top_n: int = 10) -> dict:
+    """Fetch per-cell congestion scores from the controller and return ranked results."""
+    data = _ctrl("/congestion")
+    if "error" in data:
+        return data
+    cells = data.get("cells", [])[:top_n]
+    summary = data.get("summary", {})
+    # Attach neighbour headroom hint for the top critical cells
+    hints = []
+    for cell in cells[:5]:
+        if cell["level"] in ("CRITICAL", "HIGH"):
+            nbrs = _ctrl(f"/neighbors/{cell['cell_id']}?max_neighbors=3")
+            cell["neighbors"] = nbrs.get("neighbors", [])
+        hints.append(cell)
+    return {
+        "summary": summary,
+        "top_congested_cells": hints + cells[5:],
+        "guidance": (
+            "For CRITICAL cells: call move_cell to shift to a lighter DU, or rely on "
+            "neighbor_load_steer SON actions already written by the KPI agent. "
+            "For HIGH cells: monitor — the KPI agent will pre-emptively steer if score "
+            "exceeds 0.65. Use get_son_status to see recent autonomous actions taken."
+        ),
+    }
+
+
 def query_network() -> dict:
     """Return the complete current network state: all cells, DUs, CUs with live KPIs."""
     return _ctrl("/network")
@@ -458,6 +484,27 @@ TOOL_SCHEMAS = [
             "required": ["cell_id"],
         },
     },
+    {
+        "name": "optimize_congestion",
+        "description": (
+            "Get a live congestion report for all 30 cells ranked by a multi-factor score "
+            "(PRB 40%, SINR-inverse 20%, BLER 20%, latency 20%). Returns severity levels "
+            "(CRITICAL/HIGH/MODERATE/LOW), per-cell scores, and neighbor headroom hints for "
+            "the top 5 cells. Use this before calling move_cell to understand which cells "
+            "need intervention and which neighbors have spare capacity."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "top_n": {
+                    "type": "integer",
+                    "description": "Number of top congested cells to return (default 10)",
+                    "default": 10,
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 # Map tool name → function
@@ -475,4 +522,5 @@ TOOL_MAP = {
     "get_son_status":            lambda args: get_son_status(**args),
     "add_cell":                  lambda args: add_cell(**args),
     "remove_cell":               lambda args: remove_cell(**args),
+    "optimize_congestion":       lambda args: optimize_congestion(**args),
 }
