@@ -533,7 +533,7 @@ const CHAT_SHORTCUTS = {
   '/ue':     'Give me a summary of UE usage patterns: which slices are most active, what are the average latencies, and how many handovers have occurred?',
 };
 
-let chatSession = 'default';
+let chatSession = 'map-' + Math.random().toString(36).slice(2, 9);
 let chatBusy = false;
 
 function escHtml(s) {
