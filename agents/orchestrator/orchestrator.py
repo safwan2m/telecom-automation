@@ -160,6 +160,8 @@ def build_network_context() -> str:
 
 # ── Tool execution (shared by both backends) ──────────────────────────────────
 
+_MAX_TOOL_RESULT_CHARS = 40_000  # ~10k tokens — keeps tool results inside model context limits
+
 def execute_tool(name: str, args: dict, _parent_run=None) -> dict:
     fn = T.TOOL_MAP.get(name)
     if fn is None:
@@ -170,6 +172,13 @@ def execute_tool(name: str, args: dict, _parent_run=None) -> dict:
         if not isinstance(result, dict):
             result = {"result": result}
         result = json.loads(json.dumps(result, default=str))
+        # Guard against oversized results overflowing the model context window
+        serialized = json.dumps(result)
+        if len(serialized) > _MAX_TOOL_RESULT_CHARS:
+            result = {
+                "warning": f"Result too large ({len(serialized):,} chars). Add filters to narrow the query.",
+                "hint": f"For {name}: supply cell_id, ue_id, or reduce last_minutes.",
+            }
         tracing.end_run(span, outputs=result)
         return result
     except Exception as e:
