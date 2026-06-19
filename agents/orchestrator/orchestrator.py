@@ -158,6 +158,41 @@ def build_network_context() -> str:
         return "\n\n(Network snapshot unavailable — controller may be starting up.)"
 
 
+# ── Session history helpers ───────────────────────────────────────────────────
+
+_MAX_HISTORY_CHARS    = 120_000  # ~30k tokens budget for Claude CLI history
+_MAX_HISTORY_MESSAGES = 20       # ~5 full exchanges with tool calls
+
+
+def _is_plain_user(msg: dict) -> bool:
+    """True for a standalone user question; False for a tool_result user message."""
+    return msg.get("role") == "user" and isinstance(msg.get("content"), str)
+
+
+def _trim_claude_history(history: list) -> None:
+    """Drop oldest exchanges from history until it fits within the token budget.
+
+    Maintains the invariant that history always starts with a plain user message
+    so the Claude API never receives an assistant-first or tool-result-first list.
+    """
+    # Step 1: cap by message count
+    if len(history) > _MAX_HISTORY_MESSAGES:
+        cut = max(0, len(history) - _MAX_HISTORY_MESSAGES)
+        while cut < len(history) - 1 and not _is_plain_user(history[cut]):
+            cut += 1
+        if cut:
+            log.warning("History trimmed from %d → %d messages.", len(history), len(history) - cut)
+            del history[:cut]
+
+    # Step 2: belt-and-suspenders size check (catches large tool results)
+    while len(history) > 1:
+        if sum(len(json.dumps(m, default=str)) for m in history) <= _MAX_HISTORY_CHARS:
+            break
+        history.pop(0)
+        while history and not _is_plain_user(history[0]) and len(history) > 1:
+            history.pop(0)
+
+
 # ── Tool execution (shared by both backends) ──────────────────────────────────
 
 _MAX_TOOL_RESULT_CHARS = 40_000  # ~10k tokens — keeps tool results inside model context limits
@@ -194,7 +229,8 @@ def chat_turn_gemini(session_id: str, user_message: str):
         "chat/gemini",
         {"message": user_message, "model": MODEL_NAME, "session_id": session_id},
     )
-    history = _gemini_sessions.setdefault(session_id, [])
+    history    = _gemini_sessions.setdefault(session_id, [])
+    turn_start = len(history)                       # rollback point
     history.append(types.Content(
         role="user",
         parts=[types.Part(text=user_message)],
@@ -244,6 +280,7 @@ def chat_turn_gemini(session_id: str, user_message: str):
             yield "\n"
 
     except Exception as e:
+        del history[turn_start:]                    # rollback — remove partial turn
         err = str(e)
         log.error("Gemini API error: %s", err)
         tracing.end_run(ls_run, error=err)
@@ -265,6 +302,8 @@ def chat_turn_claude(session_id: str, user_message: str):
         {"message": user_message, "model": MODEL_NAME, "session_id": session_id},
     )
     history = _claude_sessions.setdefault(session_id, [])
+    _trim_claude_history(history)               # drop oldest exchanges if over budget
+    turn_start = len(history)                   # rollback point — BEFORE this turn
     history.append({"role": "user", "content": user_message})
 
     system = SYSTEM_PROMPT + build_network_context()
@@ -307,6 +346,7 @@ def chat_turn_claude(session_id: str, user_message: str):
             yield "\n"
 
     except Exception as e:
+        del history[turn_start:]                # rollback — remove partial turn
         log.error("Claude CLI error: %s", e)
         tracing.end_run(ls_run, error=str(e))
         yield f"\n\n[Error] {e}\n"
