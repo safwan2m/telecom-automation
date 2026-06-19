@@ -129,10 +129,16 @@ services:
       INFLUX_TOKEN: ${INFLUXDB_TOKEN}
       INFLUX_ORG: ${INFLUXDB_ORG}
       INFLUX_BUCKET: ${INFLUXDB_BUCKET}
-      # ── LangSmith tracing (optional — omit LANGCHAIN_API_KEY to disable) ──
+      # ── LangSmith tracing (optional — set LANGCHAIN_API_KEY + LANGCHAIN_TRACING_V2=true) ──
+      # LANGCHAIN_* is the legacy naming; LANGSMITH_* is preferred in SDK >= 0.2.
+      # Both are forwarded so either naming convention in .env works.
       LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
       LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
       LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-telecom-automation}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-telecom-automation}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
 
   # ── Network Map Server ────────────────────────────────────────────────────
 
