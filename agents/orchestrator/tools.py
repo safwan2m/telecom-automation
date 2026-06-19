@@ -174,9 +174,15 @@ def query_ue(ue_id: str = "", cell_id: str = "", last_minutes: int = 30) -> list
     """
     Query per-UE usage and mobility events from InfluxDB.
     Filter by ue_id or cell_id; returns both ue_usage and ue_mobility records.
+    Always supply cell_id or ue_id — unfiltered queries over 18,400 UEs are
+    truncated to 30 usage records and 10 mobility events.
     """
     ue_filter   = f'|> filter(fn: (r) => r.ue_id == "{ue_id}")' if ue_id else ""
     cell_filter = f'|> filter(fn: (r) => r.cell_id == "{cell_id}")' if cell_id else ""
+    # group(columns:[]) merges all per-series tables into one before limit(),
+    # making limit() a true global cap instead of per-table.
+    usage_limit = 30 if not (ue_id or cell_id) else 50
+    mob_limit   = 10 if not (ue_id or cell_id) else 20
     flux_usage  = f"""
 from(bucket: "{INFLUX_BUCKET}")
   |> range(start: -{last_minutes}m)
@@ -186,7 +192,8 @@ from(bucket: "{INFLUX_BUCKET}")
                     or r._field == "latency_ms" or r._field == "jitter_ms"
                     or r._field == "packet_loss")
   |> last()
-  |> limit(n: 50)
+  |> group(columns: [])
+  |> limit(n: {usage_limit})
 """
     cell_mob_filter = (
         f'|> filter(fn: (r) => r.source_cell == "{cell_id}" or r.target_cell == "{cell_id}")'
@@ -200,11 +207,18 @@ from(bucket: "{INFLUX_BUCKET}")
   |> filter(fn: (r) => r._field == "ho_duration_ms" or r._field == "rsrp_source"
                     or r._field == "rsrp_target" or r._field == "velocity_kmh")
   |> last()
-  |> limit(n: 20)
+  |> group(columns: [])
+  |> limit(n: {mob_limit})
 """
     usage    = _influx_query(flux_usage)
     mobility = _influx_query(flux_mob)
-    return {"usage_records": usage, "mobility_events": mobility}
+    warning  = (
+        {"warning": "No ue_id or cell_id filter supplied — results capped at "
+                    f"{usage_limit} usage and {mob_limit} mobility records. "
+                    "Add cell_id='MLS_XXX_XX' to get full per-cell UE data."}
+        if not (ue_id or cell_id) else {}
+    )
+    return {**warning, "usage_records": usage, "mobility_events": mobility}
 
 
 def get_son_status(last_minutes: int = 60) -> dict:
