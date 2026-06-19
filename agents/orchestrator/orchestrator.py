@@ -26,7 +26,7 @@ from google import genai
 from google.genai import types
 
 import tools as T
-from langsmith import traceable, trace as ls_trace
+import tracing
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -58,6 +58,8 @@ else:
     USE_CLAUDE     = False
     claude_client  = None
     log.info("Backend: Gemini  model=%s", MODEL_NAME)
+
+tracing.setup()
 
 app = FastAPI(title="Telecom Orchestrator", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -123,16 +125,18 @@ GEMINI_TOOLS = [{
 }]
 
 
-# ── LangSmith — Gemini LLM span ──────────────────────────────────────────────
+# ── Gemini API call with explicit LangSmith span ─────────────────────────────
 
-@traceable(run_type="llm", name="gemini.generate_content")
-def _call_gemini(contents: list, config) -> object:
-    """Thin wrapper so each Gemini API call appears as an LLM span in LangSmith."""
-    return gemini.models.generate_content(
-        model=MODEL_NAME,
-        contents=contents,
-        config=config,
-    )
+def _call_gemini(contents: list, config, _parent_run=None) -> object:
+    span = tracing.tool_span(_parent_run, name="gemini.generate_content",
+                             inputs={"model": MODEL_NAME, "num_contents": len(contents)})
+    try:
+        result = gemini.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
+        tracing.end_run(span, outputs={"model": MODEL_NAME})
+        return result
+    except Exception as e:
+        tracing.end_run(span, error=str(e))
+        raise
 
 
 # ── Context injection ─────────────────────────────────────────────────────────
@@ -156,28 +160,31 @@ def build_network_context() -> str:
 
 # ── Tool execution (shared by both backends) ──────────────────────────────────
 
-def execute_tool(name: str, args: dict) -> dict:
+def execute_tool(name: str, args: dict, _parent_run=None) -> dict:
     fn = T.TOOL_MAP.get(name)
     if fn is None:
         return {"error": f"Unknown tool: {name}"}
-    with ls_trace(name=name, run_type="tool", inputs={"args": args}) as run:
-        try:
-            result = fn(args)
-            if not isinstance(result, dict):
-                result = {"result": result}
-            result = json.loads(json.dumps(result, default=str))
-            run.end(outputs=result)
-            return result
-        except Exception as e:
-            run.end(error=str(e))
-            return {"error": str(e)}
+    span = tracing.tool_span(_parent_run, name=name, inputs=args)
+    try:
+        result = fn(args)
+        if not isinstance(result, dict):
+            result = {"result": result}
+        result = json.loads(json.dumps(result, default=str))
+        tracing.end_run(span, outputs=result)
+        return result
+    except Exception as e:
+        tracing.end_run(span, error=str(e))
+        return {"error": str(e)}
 
 
 # ── Gemini chat turn ──────────────────────────────────────────────────────────
 
-@traceable(run_type="chain", name="chat/gemini")
 def chat_turn_gemini(session_id: str, user_message: str):
     """Run one full Gemini turn (including tool loops) and yield text chunks."""
+    ls_run = tracing.start_run(
+        "chat/gemini",
+        {"session_id": session_id, "message": user_message, "model": MODEL_NAME},
+    )
     history = _gemini_sessions.setdefault(session_id, [])
     history.append(types.Content(
         role="user",
@@ -190,9 +197,10 @@ def chat_turn_gemini(session_id: str, user_message: str):
         tools=GEMINI_TOOLS,
     )
 
+    response_chunks: list[str] = []
     try:
         while True:
-            response = _call_gemini(history, config)
+            response = _call_gemini(history, config, _parent_run=ls_run)
 
             model_content = response.candidates[0].content
             history.append(model_content)
@@ -202,7 +210,9 @@ def chat_turn_gemini(session_id: str, user_message: str):
                           if getattr(p, "function_call", None) and p.function_call.name]
 
             if text_parts:
-                yield "".join(text_parts)
+                chunk = "".join(text_parts)
+                response_chunks.append(chunk)
+                yield chunk
 
             if not tool_calls:
                 break
@@ -210,8 +220,8 @@ def chat_turn_gemini(session_id: str, user_message: str):
             fn_parts = []
             for tc in tool_calls:
                 yield f"\n\n*[calling tool: {tc.name}...]*\n"
-                result = execute_tool(tc.name, dict(tc.args))
-                log.info("Tool %s → %s", tc.name, str(result)[:120])
+                result = execute_tool(tc.name, dict(tc.args), _parent_run=ls_run)
+                log.info("Tool %s -> %s", tc.name, str(result)[:120])
                 fn_parts.append(
                     types.Part(
                         function_response=types.FunctionResponse(
@@ -227,27 +237,35 @@ def chat_turn_gemini(session_id: str, user_message: str):
     except Exception as e:
         err = str(e)
         log.error("Gemini API error: %s", err)
+        tracing.end_run(ls_run, error=err)
         if "429" in err or "quota" in err.lower() or "ResourceExhausted" in err:
             yield "\n\n[Error] Gemini quota exceeded. Wait a moment or check https://ai.dev/rate-limit\n"
         else:
             yield f"\n\n[Error] {err}\n"
+        return
+
+    tracing.end_run(ls_run, outputs={"response": "".join(response_chunks)})
 
 
 # ── Claude CLI chat turn ──────────────────────────────────────────────────────
 
-@traceable(run_type="chain", name="chat/claude")
 def chat_turn_claude(session_id: str, user_message: str):
     """Run one full Claude CLI turn (including tool loops) and yield text chunks."""
+    ls_run = tracing.start_run(
+        "chat/claude",
+        {"session_id": session_id, "message": user_message, "model": MODEL_NAME},
+    )
     history = _claude_sessions.setdefault(session_id, [])
     history.append({"role": "user", "content": user_message})
 
     system = SYSTEM_PROMPT + build_network_context()
 
+    response_chunks: list[str] = []
     try:
         while True:
             response = claude_client.messages.create(
                 system=system,
-                tools=T.TOOL_SCHEMAS,   # already in {name, description, input_schema} format
+                tools=T.TOOL_SCHEMAS,
                 messages=history,
             )
 
@@ -255,7 +273,9 @@ def chat_turn_claude(session_id: str, user_message: str):
             tool_blocks = [b       for b in response.content if b.type == "tool_use"]
 
             if text_parts:
-                yield "".join(text_parts)
+                chunk = "".join(text_parts)
+                response_chunks.append(chunk)
+                yield chunk
 
             if response.stop_reason == "end_turn" or not tool_blocks:
                 history.append({"role": "assistant", "content": response.content})
@@ -266,8 +286,8 @@ def chat_turn_claude(session_id: str, user_message: str):
             tool_results = []
             for tb in tool_blocks:
                 yield f"\n\n*[calling tool: {tb.name}...]*\n"
-                result = execute_tool(tb.name, tb.input)
-                log.info("Tool %s → %s", tb.name, str(result)[:120])
+                result = execute_tool(tb.name, tb.input, _parent_run=ls_run)
+                log.info("Tool %s -> %s", tb.name, str(result)[:120])
                 tool_results.append({
                     "type":        "tool_result",
                     "tool_use_id": tb.id,
@@ -279,7 +299,11 @@ def chat_turn_claude(session_id: str, user_message: str):
 
     except Exception as e:
         log.error("Claude CLI error: %s", e)
+        tracing.end_run(ls_run, error=str(e))
         yield f"\n\n[Error] {e}\n"
+        return
+
+    tracing.end_run(ls_run, outputs={"response": "".join(response_chunks)})
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
