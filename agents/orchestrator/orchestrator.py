@@ -183,7 +183,7 @@ def chat_turn_gemini(session_id: str, user_message: str):
     """Run one full Gemini turn (including tool loops) and yield text chunks."""
     ls_run = tracing.start_run(
         "chat/gemini",
-        {"session_id": session_id, "message": user_message, "model": MODEL_NAME},
+        {"message": user_message, "model": MODEL_NAME, "session_id": session_id},
     )
     history = _gemini_sessions.setdefault(session_id, [])
     history.append(types.Content(
@@ -253,7 +253,7 @@ def chat_turn_claude(session_id: str, user_message: str):
     """Run one full Claude CLI turn (including tool loops) and yield text chunks."""
     ls_run = tracing.start_run(
         "chat/claude",
-        {"session_id": session_id, "message": user_message, "model": MODEL_NAME},
+        {"message": user_message, "model": MODEL_NAME, "session_id": session_id},
     )
     history = _claude_sessions.setdefault(session_id, [])
     history.append({"role": "user", "content": user_message})
