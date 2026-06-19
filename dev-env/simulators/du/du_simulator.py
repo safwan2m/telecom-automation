@@ -288,7 +288,7 @@ class CellState:
                 ul = int(dl * random.uniform(0.08, 0.22))
                 lat, jit = random.uniform(5, 35), random.uniform(0.5, 6)
             out.append(dict(ue_id=uid, cell_id=self.cell_id, area=self.cfg["area"],
-                            slice_type=sl, dl_bytes=dl, ul_bytes=ul,
+                            slice_type=sl, dl_bytes=float(dl), ul_bytes=float(ul),
                             latency_ms=round(lat, 2), jitter_ms=round(jit, 2),
                             packet_loss=round(random.uniform(0, 0.003), 5)))
         return out

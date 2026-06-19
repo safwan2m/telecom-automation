@@ -192,6 +192,7 @@ from(bucket: "{INFLUX_BUCKET}")
                     or r._field == "latency_ms" or r._field == "jitter_ms"
                     or r._field == "packet_loss")
   |> last()
+  |> toFloat()
   |> group(columns: [])
   |> limit(n: {usage_limit})
 """
