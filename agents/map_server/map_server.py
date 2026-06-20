@@ -132,6 +132,14 @@ MAP_HTML = """<!DOCTYPE html>
     overflow: hidden;
   }
   #chat-panel.collapsed #chat-body { display: none; }
+  #chat-panel.collapsed #chat-header {
+    padding: 8px 0;
+    justify-content: center;
+  }
+  #chat-panel.collapsed #orch-dot,
+  #chat-panel.collapsed #chat-header h2,
+  #chat-panel.collapsed #orch-status,
+  #chat-panel.collapsed #clear-chat-btn { display: none; }
 
   #chat-header {
     padding: 8px 10px;
@@ -743,7 +751,9 @@ let chatCollapsed = false;
 document.getElementById('toggle-chat-btn').addEventListener('click', () => {
   chatCollapsed = !chatCollapsed;
   document.getElementById('chat-panel').classList.toggle('collapsed', chatCollapsed);
-  document.getElementById('toggle-chat-btn').innerHTML = chatCollapsed ? '&#9654;' : '&#9664;';
+  const tb = document.getElementById('toggle-chat-btn');
+  tb.innerHTML = chatCollapsed ? '&#9654;' : '&#9664;';
+  tb.title = chatCollapsed ? 'Expand chat panel' : 'Collapse chat panel';
   // Let Leaflet know map size changed
   setTimeout(() => map.invalidateSize(), 220);
 });
