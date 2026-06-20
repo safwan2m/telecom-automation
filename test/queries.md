@@ -397,6 +397,55 @@ before/after capacity comparison, counterfactual explanation.
 
 ---
 
+---
+
+## Loophole Test Queries
+
+These queries are designed to expose **structural gaps** in the simulator, KPI agent,
+LSTM model, and planning API. Each query names the loophole it targets and what
+correct behaviour would look like vs what the system actually does.
+
+---
+
+### L — Simulator Blind Spots
+
+| # | Query | Loophole exposed | Expected vs Actual |
+|---|---|---|---|
+| L1 | Which UE connected to MLS_RWS_01 is consuming the most bandwidth right now? Ask again 30 seconds later. | `usage_sample()` picks only **8 UEs per tick** from a pool of up to 900. The "top UE" changes completely every 10 s because it reflects a random 8-UE window, not all 900. | **Expected:** stable top-UE ranking. **Actual:** answer changes every query — 99% of UEs are never visible. |
+| L2 | How many UEs are in the network right now? Compare that number to the theoretical peak of 18,400. | During the 7 PM peak the simulator caps each cell at `max_ues`. Overflow UEs are **silently dropped** — they are not handed to neighbouring cells. | **Expected:** ~18,400 at peak. **Actual:** sum of `max_ues` across 30 cells (~16,300). Missing UEs are nowhere in the system. |
+| L3 | Show handover events for MLS_RWS_01. Which cells are the handover targets? | `mobility_events()` picks `target = random.choice(neighbours)` regardless of signal strength or load. In a real network handovers go to the strongest-RSRP neighbour. | **Expected:** targets are the closest, highest-RSRP cells. **Actual:** any cell in the same DU is equally likely — even lightly-covered ones far away. |
+| L4 | Two adjacent overloaded cells (MLS_RWS_01 and MLS_18C_01) are both at 95% PRB. Does either cell's SINR reflect inter-cell interference from the other? | `interference_dbm = -100 + load × 20 + gaussian` depends only on the **cell's own load**, not on neighbours. Co-channel interference between adjacent cells is not modelled. | **Expected:** adjacent 5G n78 cells at 95% load should show elevated interference and suppressed SINR. **Actual:** each cell's SINR is independent of the other. |
+| L5 | At what local time (IST) does the simulator show peak traffic? Check `prb_dl_pct` at 1 PM IST vs 7 PM IST. | `load_factor()` uses `datetime.now()` inside the Docker container, which runs in **UTC**. `HOURLY_LOAD[19]` (peak = 1.00) fires at 19:00 UTC = 00:30 IST the next day. The true evening peak is not simulated at the right local time. | **Expected:** peak PRB at ~7 PM IST. **Actual:** peak fires at 19:00 container-timezone (UTC if no TZ env var set), ~5.5 h off from Bangalore IST. |
+| L6 | Can two UEs on the same cell ever have the same UE ID? Describe how UE IDs are generated. | In `tick()`, new UEs are added as `f"UE-{cell_id}-{random.randint(0,9999):04d}"`. With 900 UEs and only 10,000 possible suffixes, the birthday paradox gives ~**5% collision probability** per cell. A colliding UE silently overwrites the previous one's slice type. | **Expected:** unique UE IDs. **Actual:** ~1 in 20 ticks on a full cell overwrites an existing UE entry with a different slice assignment. |
+
+---
+
+### L — KPI Agent / SON Behaviour Gaps
+
+| # | Query | Loophole exposed | Expected vs Actual |
+|---|---|---|---|
+| L7 | MLS_RWS_01 has been at 92% PRB for the last 8 minutes. Show SON actions taken on it in that window. | `COOLDOWN_SEC = 300`. After the first action, the cell is locked for **5 minutes**. If the move fails or the DU target is also overloaded, no retry fires. The cell stays critical with only alert writes — no corrective action. | **Expected:** repeated steering until PRB drops. **Actual:** one action attempt, then silence for 5 min regardless of outcome. |
+| L8 | How many alerts exist for MLS_SNK_01 in the last 60 minutes? | No alert deduplication exists. Every KPI agent cycle (~every 10–30 s) writes a **new alert row** for every problem cell. One persistently overloaded cell produces 120–360 identical alert rows per hour. | **Expected:** 1–3 alerts (initial detection + re-check). **Actual:** potentially hundreds of identical rows filling InfluxDB. |
+| L9 | MLS_BEL_01 is classified OVERLOAD with a congestion score of 0.70. Its neighbours are all at 65–70% PRB. What SON action fires? | Neighbor steering requires `neighbour PRB < OVERLOAD_PRB − 25 = 60%`. A DU move requires `score > 0.75`. At score 0.70 with neighbours at 65–70%, **neither branch fires**. The cell is in the dead zone. | **Expected:** some action (partial steering, advisory). **Actual:** OVERLOAD alert is written but no steering, no move — cell remains unaddressed indefinitely. |
+| L10 | What does the PRE_EMPTIVE_STEER SON action actually change in the network? Check topology before and after. | `_write_son_action(..., "PRE_EMPTIVE_STEER", ...)` only inserts a row into the `son_actions` InfluxDB measurement. **No handover command is sent to the cell, no UE is moved, no API is called.** It is a log entry masquerading as an action. | **Expected:** UEs proactively handed to a less-loaded neighbour. **Actual:** topology and UE distribution are unchanged. |
+| L11 | Restart the KPI agent container. What happens to anomaly detection in the first 60 seconds? | `buffers` (per-cell deques) are **in-memory** and lost on restart. For the first 6 poll cycles (60 s at 10 s intervals), every cell falls back to **rule-based classification**. LSTM trend detection is blind during this window. | **Expected:** continuous LSTM-based detection. **Actual:** first 60 s after any KPI agent restart reverts to threshold rules; trending pre-overload conditions go undetected. |
+| L12 | Stop DU-MLS-2 for 4 minutes. Does the KPI agent raise an alert about the missing cells? | The KPI agent queries `range(start: -3m)`. Cells that stop writing after exactly 3 minutes **disappear silently** from monitoring — no "cell gone silent" alert exists. | **Expected:** alert when a cell stops reporting. **Actual:** cells vanish from the analyse() loop with no notification; `cells` list simply shrinks. |
+| L13 | Show the LSTM classification confidence for a 5G n78 cell serving exactly 900 UEs (at max_ues). | LSTM normalises `connected_ues` on `[0, 800]`. At 900 UEs, the normalised value is `900/800 = 1.125` — **outside the [0,1] training range**. The LSTM receives an out-of-distribution input for cells at max capacity. | **Expected:** reliable NORMAL/OVERLOAD classification. **Actual:** LSTM confidence may be artificially low or class may be incorrect; the model was never trained on values > 800 UEs. |
+| L14 | Check the `son_actions` table in InfluxDB for any entry with `action_type = LOAD_BALANCE`. Cross-reference with the `_last_moved` variable in kpi_agent.py. | `_last_moved: dict[str, float]` is defined at module level but **never read or written** in the analysis loop. `_is_cooling_down` and `_mark_action` use `_cell_cooldown` instead. `_last_moved` is dead code — any logic relying on it has no effect. | **Expected:** cooldown tracking via `_last_moved`. **Actual:** cooldown is tracked via `_cell_cooldown`; `_last_moved` is unused. |
+
+---
+
+### L — Planning API Durability Gaps
+
+| # | Query | Loophole exposed | Expected vs Actual |
+|---|---|---|---|
+| L15 | Generate a network plan, restart the planning API container, then try to apply the plan using the same plan_id. | Plans are stored in `_plans = {}` (in-memory dict in `planner_api.py`). A **container restart wipes all plans**. `apply_plan` returns "plan not found" with no recovery path. | **Expected:** plan persists across restarts (disk or DB). **Actual:** plan_id becomes invalid after any restart; operator must regenerate the plan. |
+| L16 | Apply a new plan while the network is serving 7,000 live UEs. What happens to those UEs? | `apply_plan` calls `POST /topology/replace` which **atomically replaces the entire topology**. All 30 existing cells are removed and replaced with the plan's cells in one write. All in-flight UE sessions on the old cells are orphaned. | **Expected:** rolling migration or at least a warning before replacement. **Actual:** immediate full-topology replacement with no UE migration — equivalent to a network wipe. |
+| L17 | Generate a plan for 10 new cells near existing cells. Do any of the new cells conflict on PCI with the already-deployed 30 cells? | The PCI planner (`pci_planner.py`) assigns PCIs collision-free **within the generated plan only**. It does not read the current topology's PCI assignments. A new cell can be assigned PCI 15 even if a nearby existing cell already uses PCI 15. | **Expected:** PCI checked against both new and existing cells. **Actual:** PCI collision between plan cells and deployed cells is possible and undetected. |
+| L18 | Plan a network where all 30 cells are assigned to DU-MLS-1 (by forcing du_count=1). Does the plan warn that DU-MLS-1 would be overloaded? | `assign_dus` groups cells by geography into `du_count` DUs. No check is made on **DU processing capacity** (cpu_pct, max schedulable cells). A plan can assign 30 cells to one DU with no warning. | **Expected:** capacity check per DU. **Actual:** any cell-to-DU assignment is accepted regardless of DU load or cell count. |
+
+---
+
 ## Known Gaps (queries that will fail or give incomplete answers)
 
 | Query | Reason |
