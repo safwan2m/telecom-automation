@@ -1,7 +1,7 @@
 {
-  "version": 478,
-  "last_updated": "2026-06-17T16:11:09.172111+00:00",
-  "updated_by": "move_cell:MLS_10C_01",
+  "version": 479,
+  "last_updated": "2026-06-20T11:24:38.923191+00:00",
+  "updated_by": "add_cell:MLS_MGR_NEW_01",
   "meta": {
     "city": "Bangalore",
     "zone": "Malleswaram",
@@ -77,7 +77,8 @@
         "MLS_6CR_03",
         "MLS_6CR_01",
         "MLS_CHD_01",
-        "MLS_MGR_01"
+        "MLS_MGR_01",
+        "MLS_MGR_NEW_01"
       ]
     }
   },
@@ -561,6 +562,22 @@
       "tx_power_w": 200,
       "idle_power_w": 50,
       "max_ues": 250
+    },
+    "MLS_MGR_NEW_01": {
+      "area": "Malleswaram",
+      "lat": 12.998,
+      "lon": 77.57,
+      "generation": "5G",
+      "band": "n78",
+      "freq_mhz": 3500,
+      "pci": 11,
+      "vendor": "Nokia",
+      "hardware_model": "AirScale MAA 64T64R",
+      "antenna_config": "64T64R",
+      "peak_dl_mbps": 3800,
+      "tx_power_w": 1000,
+      "idle_power_w": 250,
+      "max_ues": 900
     }
   }
 }
