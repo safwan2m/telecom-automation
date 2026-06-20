@@ -401,10 +401,13 @@ before/after capacity comparison, counterfactual explanation.
 
 | Query | Reason |
 |---|---|
-| Show the top 10 UEs by throughput | `query_ue` returns per-UE records but no server-side sort by throughput |
-| List UEs currently streaming video | Slice types simulated but not filterable per-UE via chat |
-| Which UEs had more than 3 handovers today? | `query_ue` returns last mobility event per UE, not a count over the day |
-| Show the UE with the highest RACH attempts | RACH procedures not implemented in simulator |
-| Show all neighboring cells of MLS_RWS_01 | No direct NRL tool; `/neighbors` is used internally by `optimize_congestion` |
-| Explain the connection path from UE_X to the core | No per-UE session or E2E path tracking |
-| Deploy a 700 MHz cell | n28 excluded by design — coverage extends to Peenya (~8.4 km radius) |
+| Show the top 10 UEs by throughput | No per-UE session tracking — only cell-aggregate data |
+| List UEs currently streaming video | Slice types simulated but not queryable per-UE via chat |
+| Which UEs had more than 3 handovers today? | Handover events in InfluxDB but no tool to query them |
+| Show the UE with the highest RACH attempts | RACH procedures not implemented |
+| Show all neighboring cells of Cell_X | No Neighbor Relation List (NRL) in topology |
+| Explain the connection path from UE_X to the core | No per-UE session or path tracking |
+| Deploy a 700 MHz cell | n28 excluded by design — coverage extends to Peenya |
+
+Q: Would like to deploy a new cell in Milk colony in Malleswaram, the user density is expected to spike by 300 users. Is the current network capable of handling that?
+coordinates_hallucinated.

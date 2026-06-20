@@ -528,7 +528,7 @@ const CHAT_SHORTCUTS = {
   '/status': 'What is the current status of all cells, DUs, and CUs? Summarise in a table.',
   '/alerts': 'Show me all recent KPI alerts from the last 60 minutes.',
   '/cells':  'List all cells with their current connected UEs, PRB utilisation, and which DU they belong to.',
-  '/plan':   'Generate a network plan for Bangalore with default parameters and show me the summary.',
+  '/plan':   'I want to plan a network deployment. Ask me for all the required parameters before proceeding.',
   '/son':    'Show me the SON agent status: what autonomous actions has it taken in the last hour, and are there any active anomalies?',
   '/ue':     'Give me a summary of UE usage patterns: which slices are most active, what are the average latencies, and how many handovers have occurred?',
 };

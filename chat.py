@@ -66,7 +66,7 @@ SHORTCUTS = {
     "/status":  "What is the current status of all cells, DUs, and CUs? Summarise in a table.",
     "/alerts":  "Show me all recent KPI alerts from the last 60 minutes.",
     "/cells":   "List all cells with their current connected UEs, PRB utilisation, and DU assignment.",
-    "/plan":    "Generate a network plan for Malleswaram with default parameters and show me a summary.",
+    "/plan":    "I want to plan a network deployment. Ask me for all the required parameters before proceeding.",
     "/son":     "Show me the recent SON autonomous actions and their outcomes.",
     "/ue":      "Show me UE usage and mobility events from the last 30 minutes.",
 }

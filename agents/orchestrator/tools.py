@@ -114,54 +114,83 @@ def move_du(du_id: str, to_cu_id: str) -> dict:
 
 
 def plan_network(
-    geographic_area: str = "Bangalore",
-    expected_user_density: float = 500.0,
-    embb_fraction: float = 0.7,
-    urllc_fraction: float = 0.2,
-    mmtc_fraction: float = 0.1,
+    geographic_area: str | None = None,
+    expected_user_density: float | None = None,
+    embb_fraction: float | None = None,
+    urllc_fraction: float | None = None,
+    mmtc_fraction: float | None = None,
+    peak_hour: int | None = None,
     spectrum_bands: list[str] | None = None,
-    deployment_budget: float = 2_000_000.0,
-    e2e_latency_ms: float = 10.0,
+    deployment_budget: float | None = None,
+    e2e_latency_ms: float | None = None,
     use_mip: bool = False,
     sinr_min_db: float = 10.0,
 ) -> dict:
     """
     Run the planning engine to generate a new network plan.
-    Returns cell placement, PCI assignments, DU/CU grouping, and slice allocation.
-    use_mip=True selects cells using MIP optimisation (Almoghathawi et al. 2024)
-    instead of the default heuristic.  sinr_min_db sets the SINR quality constraint.
+    Call with only the values the operator has explicitly provided — do NOT infer
+    or assume missing values. The server will return which fields are still needed.
+    Once all fields are supplied it performs a sufficiency analysis (reorganize vs deploy)
+    and returns a unified plan schema.
     """
-    body = {
-        "geographic_area":       geographic_area,
-        "expected_user_density": expected_user_density,
-        "traffic_profile":       {"eMBB": embb_fraction, "URLLC": urllc_fraction, "mMTC": mmtc_fraction},
-        "spectrum_bands":        spectrum_bands or ["n78", "n28"],
-        "deployment_budget":     deployment_budget,
-        "latency_constraints":   {"e2e_ms": e2e_latency_ms, "fronthaul_us": 100.0},
-        "use_mip":               use_mip,
-        "sinr_min_db":           sinr_min_db,
-    }
+    body: dict = {}
+    if geographic_area is not None:
+        body["geographic_area"] = geographic_area
+    if expected_user_density is not None:
+        body["expected_user_density"] = expected_user_density
+    # Build traffic_profile only if at least one sub-field was provided
+    tp: dict = {}
+    if embb_fraction  is not None: tp["eMBB"]      = embb_fraction
+    if urllc_fraction is not None: tp["URLLC"]     = urllc_fraction
+    if mmtc_fraction  is not None: tp["mMTC"]      = mmtc_fraction
+    if peak_hour      is not None: tp["peak_hour"] = peak_hour
+    if tp:
+        body["traffic_profile"] = tp
+    if spectrum_bands   is not None: body["spectrum_bands"]    = spectrum_bands
+    if deployment_budget is not None: body["deployment_budget"] = deployment_budget
+    if e2e_latency_ms   is not None:
+        body["latency_constraints"] = {"e2e_ms": e2e_latency_ms, "fronthaul_us": 100.0}
+    body["use_mip"]      = use_mip
+    body["sinr_min_db"]  = sinr_min_db
     return _plan("/plan", "POST", body)
 
 
 def plan_network_multi_period(
-    demand_mode: str = "permanent",
+    geographic_area: str | None = None,
+    expected_user_density: float | None = None,
+    embb_fraction: float | None = None,
+    urllc_fraction: float | None = None,
+    mmtc_fraction: float | None = None,
+    peak_hour: int | None = None,
     spectrum_bands: list[str] | None = None,
-    deployment_budget: float = 2_000_000.0,
+    deployment_budget: float | None = None,
+    e2e_latency_ms: float | None = None,
+    demand_mode: str | None = None,
     sinr_min_db: float = 10.0,
 ) -> dict:
     """
     Run multi-period MIP network planning.
-    demand_mode='permanent': phased rollout (Case A — areas added each period).
-    demand_mode='temporary': diurnal/event demand shift (Case B — demand clusters shift).
-    Returns optimal build schedule across periods plus full network plan.
+    Call with only the values the operator has explicitly provided — do NOT infer
+    or assume missing values. The server will return which fields are still needed.
+    demand_mode='permanent': phased rollout (Case A). demand_mode='temporary': diurnal shift (Case B).
+    Returns unified plan schema with build_schedule and period_assignments populated.
     """
-    body = {
-        "demand_mode":      demand_mode,
-        "spectrum_bands":   spectrum_bands or ["n78", "n28"],
-        "deployment_budget": deployment_budget,
-        "sinr_min_db":      sinr_min_db,
-    }
+    body: dict = {}
+    if geographic_area      is not None: body["geographic_area"]       = geographic_area
+    if expected_user_density is not None: body["expected_user_density"] = expected_user_density
+    tp: dict = {}
+    if embb_fraction  is not None: tp["eMBB"]      = embb_fraction
+    if urllc_fraction is not None: tp["URLLC"]     = urllc_fraction
+    if mmtc_fraction  is not None: tp["mMTC"]      = mmtc_fraction
+    if peak_hour      is not None: tp["peak_hour"] = peak_hour
+    if tp:
+        body["traffic_profile"] = tp
+    if spectrum_bands    is not None: body["spectrum_bands"]    = spectrum_bands
+    if deployment_budget is not None: body["deployment_budget"] = deployment_budget
+    if e2e_latency_ms   is not None:
+        body["latency_constraints"] = {"e2e_ms": e2e_latency_ms, "fronthaul_us": 100.0}
+    if demand_mode is not None: body["demand_mode"] = demand_mode
+    body["sinr_min_db"] = sinr_min_db
     return _plan("/plan/multi-period", "POST", body)
 
 
@@ -390,35 +419,56 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "plan_network",
-        "description": "Run the planning engine to generate a new network plan. Returns cell placement, PCI assignments, DU/CU grouping, slice allocation, cost estimate, and timing sync strategy. The operator must call apply_plan separately to deploy it. Set use_mip=true for MIP-optimal placement with SINR quality constraints.",
+        "description": (
+            "Run the planning engine to generate a network plan. First performs a sufficiency "
+            "analysis — if existing cells already cover the required UEs at peak_hour, returns a "
+            "reorganize plan (DU rebalance + slice realloc, no new cells). Otherwise selects new "
+            "sites via heuristic or MIP. Returns unified plan schema with plan_type, is_new per "
+            "cell, and sufficiency_analysis. The operator must call apply_plan to deploy it. "
+            "ALL fields are required — ask the operator for any that are missing."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "geographic_area":        {"type": "string",  "default": "Bangalore"},
-                "expected_user_density":  {"type": "number",  "description": "Users per km²", "default": 500},
-                "embb_fraction":          {"type": "number",  "description": "eMBB traffic fraction 0-1", "default": 0.7},
-                "urllc_fraction":         {"type": "number",  "description": "URLLC traffic fraction 0-1", "default": 0.2},
-                "mmtc_fraction":          {"type": "number",  "description": "mMTC traffic fraction 0-1", "default": 0.1},
-                "spectrum_bands":         {"type": "array", "items": {"type": "string"}, "description": "e.g. ['n78','n28']"},
-                "deployment_budget":      {"type": "number",  "description": "USD", "default": 2000000},
-                "e2e_latency_ms":         {"type": "number",  "description": "E2E latency target ms", "default": 10},
-                "use_mip":                {"type": "boolean", "description": "Use MIP-optimal placement (slower but cost-optimal with SINR constraints)", "default": False},
-                "sinr_min_db":            {"type": "number",  "description": "Minimum SINR constraint for MIP placement (dB)", "default": 10},
+                "geographic_area":       {"type": "string",  "description": "Target deployment area e.g. 'Malleswaram'"},
+                "expected_user_density": {"type": "number",  "description": "Users per km²"},
+                "embb_fraction":         {"type": "number",  "description": "eMBB traffic fraction 0–1"},
+                "urllc_fraction":        {"type": "number",  "description": "URLLC traffic fraction 0–1"},
+                "mmtc_fraction":         {"type": "number",  "description": "mMTC traffic fraction 0–1 (eMBB+URLLC+mMTC must sum to 1)"},
+                "peak_hour":             {"type": "integer", "description": "Peak traffic hour 0–23 (e.g. 19 for 7 pm)"},
+                "spectrum_bands":        {"type": "array", "items": {"type": "string"}, "description": "Licensed bands e.g. ['n78','B3']"},
+                "deployment_budget":     {"type": "number",  "description": "CAPEX envelope in USD"},
+                "e2e_latency_ms":        {"type": "number",  "description": "End-to-end latency target (ms)"},
+                "use_mip":               {"type": "boolean", "description": "Use MIP-optimal cell selection (slower, cost-optimal with SINR constraints)"},
+                "sinr_min_db":           {"type": "number",  "description": "Minimum SINR threshold for MIP (dB)"},
             },
             "required": [],
         },
     },
     {
         "name": "plan_network_multi_period",
-        "description": "Run multi-period MIP network planning. permanent mode (Case A) optimises a phased rollout — BSs built in early periods serve later demand. temporary mode (Case B) optimises for shifting demand (events, diurnal peaks). Returns optimal build schedule across periods plus a deployable network plan.",
+        "description": (
+            "Run multi-period MIP network planning (Almoghathawi et al. 2024). "
+            "permanent (Case A): phased rollout — BSs built in early periods serve later demand. "
+            "temporary (Case B): shifting demand — event/diurnal peaks across periods. "
+            "Returns unified plan schema with build_schedule and period_assignments populated. "
+            "ALL fields are required — ask the operator for any that are missing."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "demand_mode":       {"type": "string", "enum": ["permanent", "temporary"], "default": "permanent",
-                                      "description": "permanent=phased rollout, temporary=diurnal/event shift"},
-                "spectrum_bands":    {"type": "array", "items": {"type": "string"}, "description": "e.g. ['n78','n28']"},
-                "deployment_budget": {"type": "number", "description": "USD", "default": 2000000},
-                "sinr_min_db":       {"type": "number", "description": "Minimum SINR constraint (dB)", "default": 10},
+                "geographic_area":       {"type": "string",  "description": "Target deployment area e.g. 'Malleswaram'"},
+                "expected_user_density": {"type": "number",  "description": "Users per km²"},
+                "embb_fraction":         {"type": "number",  "description": "eMBB traffic fraction 0–1"},
+                "urllc_fraction":        {"type": "number",  "description": "URLLC traffic fraction 0–1"},
+                "mmtc_fraction":         {"type": "number",  "description": "mMTC traffic fraction 0–1"},
+                "peak_hour":             {"type": "integer", "description": "Peak traffic hour 0–23"},
+                "spectrum_bands":        {"type": "array", "items": {"type": "string"}, "description": "Licensed bands e.g. ['n78','B3']"},
+                "deployment_budget":     {"type": "number",  "description": "CAPEX envelope in USD"},
+                "e2e_latency_ms":        {"type": "number",  "description": "End-to-end latency target (ms)"},
+                "demand_mode":           {"type": "string", "enum": ["permanent", "temporary"],
+                                          "description": "permanent=phased rollout (Case A), temporary=diurnal/event shift (Case B)"},
+                "sinr_min_db":           {"type": "number",  "description": "Minimum SINR threshold (dB)"},
             },
             "required": [],
         },
