@@ -83,7 +83,8 @@ Multiple tools can be called per response (Gemini may batch them); all are execu
 | `move_du` | `POST /move/du` | Reassign a DU to a different CU |
 | `list_areas` | `GET /areas` on Planning API | List all named Malleswaram sub-locality areas with center lat/lon and radius; call this to validate that a user-mentioned area name exists before proceeding |
 | `get_area_cells` | `GET /areas/{area_id}/cells` on Planning API | Deployed cells covering ≥ 20 % of the named area; accepts area_id or name substring (e.g. "Railway Station"); use this to assess existing coverage before calling `plan_network` |
-| `plan_network` | `POST /plan` | Heuristic placement + PCI + slice planning |
+| `list_suspended_cells` | `GET /cells/suspended` on Planning API | Cells currently suspended (hardware installed, not transmitting); call this before `plan_network` when demand has increased — the planner will reactivate these instead of deploying new hardware |
+| `plan_network` | `POST /plan` | Heuristic placement + PCI + slice planning; now returns one of five plan_types: reorganize / deploy / suspend / reactivate / reactivate_and_deploy |
 | `apply_plan` | `POST /plan/apply` | Push accepted plan to Controller as live topology |
 | `get_alerts` | InfluxDB Flux query (direct) | Recent KPI anomaly alerts tagged by severity and type |
 | `query_ue` | InfluxDB Flux query (direct) | UE-level usage and mobility data (filter by ue_id or cell_id) |

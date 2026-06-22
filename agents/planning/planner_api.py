@@ -2,13 +2,15 @@
 """
 Planning API — FastAPI service for network deployment planning.
 
-Decides whether existing cells can satisfy demand (reorganize) or new
-infrastructure is required (deploy), then generates a complete conflict-free
-plan. All plan types return an identical unified schema.
+Decides whether existing cells can satisfy demand (reorganize / suspend) or new
+infrastructure is required (deploy / reactivate), then generates a complete
+conflict-free plan.  All plan types return an identical unified schema.
 
-POST /plan              → generate plan (reorganize or deploy)
+POST /plan              → generate plan
 POST /plan/apply        → push plan to Controller (live topology update)
 GET  /plan/{id}         → retrieve a stored plan
+GET  /plans             → list all persisted plans
+GET  /cells/suspended   → list currently suspended cells
 GET  /candidates        → list candidate cell inventory
 """
 
@@ -43,6 +45,11 @@ INFLUX_URL     = os.environ.get("INFLUX_URL",    "http://influxdb:8086")
 INFLUX_TOKEN   = os.environ.get("INFLUX_TOKEN",  "telecom-super-secret-auth-token-2026")
 INFLUX_ORG     = os.environ.get("INFLUX_ORG",    "telecom")
 INFLUX_BUCKET  = os.environ.get("INFLUX_BUCKET", "telecom_metrics")
+
+# Suspension thresholds
+SUSPENSION_RATIO    = float(os.environ.get("SUSPENSION_RATIO", "2.0"))
+MIN_ACTIVE_CELLS    = 1    # never suspend the last cell covering an area
+MIN_CAPACITY_BUFFER = 1.1  # keep 10 % headroom above required_ues when deciding which cells to keep
 
 # Diurnal load profile — matches core_simulator.py HOURLY_LOAD (index = hour 0–23)
 HOURLY_LOAD = [
@@ -124,6 +131,76 @@ def _fetch_plan(plan_id: str) -> dict | None:
     return plan
 
 
+# ── Suspended cell registry ──────────────────────────────────────────────────
+
+def _write_suspension_events(
+    cells: list[dict],
+    geographic_area: str,
+    action: str,           # "suspended" | "reactivated"
+    plan_id: str,
+) -> None:
+    """
+    Write one InfluxDB point per cell to measurement 'suspended_cells'.
+    Stores the full cell dict (stripped of internal/computed fields) plus
+    action and plan_id so the latest event per cell can be queried to
+    determine current suspension status.  Never raises.
+    """
+    try:
+        wa = _get_influx().write_api(write_options=SYNCHRONOUS)
+        points = []
+        for c in cells:
+            clean = {
+                k: v for k, v in c.items()
+                if not k.startswith("_")
+                and k not in ("active", "coverage_radius_km", "distance_to_area_km",
+                              "area_coverage_fraction", "slices", "slice_warnings",
+                              "is_new", "du_id", "cu_id", "fronthaul_latency_us")
+            }
+            if "_existing_pci" in c:
+                clean["pci"] = c["_existing_pci"]
+            cell_record = {**clean, "action": action, "plan_id": plan_id,
+                           "geographic_area": geographic_area}
+            p = (
+                Point("suspended_cells")
+                .tag("cell_id",          c["cell_id"])
+                .tag("geographic_area",  geographic_area)
+                .field("cell_json",      json.dumps(cell_record))
+            )
+            points.append(p)
+        wa.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points)
+        log.info("Wrote %d '%s' events for area %s.", len(cells), action, geographic_area)
+    except Exception as exc:
+        log.warning("InfluxDB suspension event write failed: %s", exc)
+
+
+def _get_suspended_cells(geographic_area: str) -> list[dict]:
+    """
+    Return the currently suspended cells for geographic_area.
+    Queries InfluxDB: group by cell_id, take last event, keep action=='suspended'.
+    Returns [] on InfluxDB error (treated as no suspended cells).
+    """
+    flux = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -36500d)
+  |> filter(fn: (r) => r._measurement == "suspended_cells")
+  |> filter(fn: (r) => r.geographic_area == "{geographic_area}")
+  |> filter(fn: (r) => r._field == "cell_json")
+  |> group(columns: ["cell_id"])
+  |> last()
+"""
+    cells = []
+    try:
+        tables = _get_influx().query_api().query(flux, org=INFLUX_ORG)
+        for table in tables:
+            for rec in table.records:
+                cell_data = json.loads(rec.get_value())
+                if cell_data.get("action") == "suspended":
+                    cells.append(cell_data)
+    except Exception as exc:
+        log.warning("InfluxDB get_suspended_cells failed for area %s: %s", geographic_area, exc)
+    return cells
+
+
 # ── Request / Response models ────────────────────────────────────────────────
 
 class TrafficProfile(BaseModel):
@@ -198,17 +275,25 @@ def _area_matches(cell_area: str, target: str) -> bool:
 def _sufficiency_check(
     req: PlanRequest,
     area_meta: dict | None = None,
-) -> tuple[dict, list[dict]]:
+) -> tuple[dict, list[dict], list[dict]]:
     """
-    Query the live network, compute required UEs at peak hour, decide mode.
+    Query the live network, compute required UEs at peak hour, decide planning mode.
 
-    When area_meta is provided (area found in MALLESWARAM_AREAS):
-      - area_km² = π · r²  (accurate sub-locality area)
-      - covering cells identified via cells_covering_area() (≥20 % overlap)
-    Fallback (unknown area): bounding-box area, string-match on cell.area field.
+    Returns (analysis, active_covering, suspended_cells):
+      active_covering:  cells from Controller that are active (active != false) and cover the area
+      suspended_cells:  cells from InfluxDB suspended registry currently suspended for this area
 
-    Returns (analysis_dict, live_cells_list).
-    live_cells_list contains _existing_pci for use in reorganize mode.
+    Five-way mode decision (evaluated top-to-bottom, first match wins):
+      1. deployed_ues >= required_ues * SUSPENSION_RATIO and n_active > MIN_ACTIVE_CELLS
+             → "suspend"
+      2. deployed_ues >= required_ues
+             → "reorganize"
+      3. deployed_ues + suspended_ues >= required_ues
+             → "reactivate"
+      4. suspended_ues > 0
+             → "reactivate_and_deploy"
+      5. else
+             → "deploy"
     """
     area_km2     = _area_km2(req.geographic_area, area_meta)
     peak_hour    = req.traffic_profile.peak_hour
@@ -237,26 +322,45 @@ def _sufficiency_check(
                 "idle_power_w":   cd.get("idle_power_w", 250),
                 "peak_dl_mbps":   cd.get("peak_dl_mbps", 3800),
                 "_existing_pci":  cd.get("pci", 0),
+                "active":         cd.get("active", True),
             })
     except Exception as exc:
         log.warning("Controller unreachable for sufficiency check: %s", exc)
 
     if area_meta:
-        live_cells = cells_covering_area(area_meta, all_live)
+        covering_cells = cells_covering_area(area_meta, all_live)
     else:
-        live_cells = [c for c in all_live if _area_matches(c["area"], req.geographic_area)]
+        covering_cells = [c for c in all_live if _area_matches(c["area"], req.geographic_area)]
 
-    deployed_ues = sum(c.get("max_ues", 0) for c in live_cells)
-    mode = "reorganize" if deployed_ues >= required_ues else "deploy"
+    active_covering = [c for c in covering_cells if c.get("active", True)]
+    deployed_ues    = sum(c.get("max_ues", 0) for c in active_covering)
+
+    # Always fetch suspended cells — needed for mode decision and analysis
+    suspended_cells = _get_suspended_cells(req.geographic_area)
+    suspended_ues   = sum(c.get("max_ues", 0) for c in suspended_cells)
+
+    if (deployed_ues >= required_ues * SUSPENSION_RATIO
+            and len(active_covering) > MIN_ACTIVE_CELLS):
+        mode = "suspend"
+    elif deployed_ues >= required_ues:
+        mode = "reorganize"
+    elif deployed_ues + suspended_ues >= required_ues:
+        mode = "reactivate"
+    elif suspended_ues > 0:
+        mode = "reactivate_and_deploy"
+    else:
+        mode = "deploy"
+
     analysis = {
-        "area_km2":         area_km2,
-        "required_ues":     required_ues,
-        "current_capacity": deployed_ues,
-        "peak_hour":        peak_hour,
-        "load_factor":      lf,
-        "mode_chosen":      mode,
+        "area_km2":           area_km2,
+        "required_ues":       required_ues,
+        "active_capacity":    deployed_ues,
+        "suspended_capacity": suspended_ues,
+        "peak_hour":          peak_hour,
+        "load_factor":        lf,
+        "mode_chosen":        mode,
     }
-    return analysis, live_cells
+    return analysis, active_covering, suspended_cells
 
 
 def _run_pipeline(
@@ -273,7 +377,7 @@ def _run_pipeline(
     Shared downstream pipeline: PCI → DU → CU → centroids → timing → slices.
 
     keep_pcis: if provided, uses these PCIs instead of re-running assignment
-               (reorganize mode — preserve existing cell PCIs to minimise disruption).
+               (reorganize / reactivate mode — preserve existing cell PCIs).
     Returns dict with cell_plans, du_plans, cu_plans, timing_sync, violations, du_cells.
     """
     if keep_pcis is not None:
@@ -364,24 +468,33 @@ def generate_plan(req: PlanRequest) -> dict:
         "fronthaul_us": req.latency_constraints.fronthaul_us,
     }
 
-    sa, live_cells = _sufficiency_check(req, area_meta)
+    sa, active_covering, suspended_cells = _sufficiency_check(req, area_meta)
+    mode = sa["mode_chosen"]
 
-    if sa["mode_chosen"] == "reorganize" and live_cells:
-        return _reorganize_plan(req, sa, live_cells, traffic, lat_constraints)
+    if mode == "suspend":
+        return _suspend_plan(req, sa, active_covering, traffic, lat_constraints)
+    if mode == "reorganize" and active_covering:
+        return _reorganize_plan(req, sa, active_covering, traffic, lat_constraints)
+    if mode == "reactivate":
+        return _reactivate_plan(req, sa, active_covering, suspended_cells, traffic, lat_constraints)
+    if mode == "reactivate_and_deploy":
+        return _reactivate_and_deploy_plan(
+            req, sa, active_covering, suspended_cells, traffic, lat_constraints, area_meta
+        )
     return _deploy_plan(req, sa, traffic, lat_constraints, area_meta)
 
 
 def _reorganize_plan(
     req: PlanRequest,
     sa: dict,
-    live_cells: list[dict],
+    active_covering: list[dict],
     traffic: dict,
     lat_constraints: dict,
 ) -> dict:
-    """Rebalance DU assignments + reallocate slices for existing deployed cells."""
-    keep_pcis = {c["cell_id"]: c["_existing_pci"] for c in live_cells}
+    """Rebalance DU assignments + reallocate slices for existing active cells."""
+    keep_pcis = {c["cell_id"]: c["_existing_pci"] for c in active_covering}
     pipeline  = _run_pipeline(
-        cells=live_cells,
+        cells=active_covering,
         traffic=traffic,
         lat_constraints=lat_constraints,
         spectrum_bands=req.spectrum_bands,
@@ -403,15 +516,15 @@ def _reorganize_plan(
         "dus":              pipeline["du_plans"],
         "cus":              pipeline["cu_plans"],
         "summary": {
-            "n_cells":               len(live_cells),
-            "n_new_cells":           0,
-            "n_dus":                 len(pipeline["du_plans"]),
-            "n_cus":                 len(pipeline["cu_plans"]),
-            "total_capacity_ues":    sum(c["max_ues"] for c in live_cells),
-            "estimated_cost_usd":    0.0,
+            "n_cells":                len(active_covering),
+            "n_new_cells":            0,
+            "n_dus":                  len(pipeline["du_plans"]),
+            "n_cus":                  len(pipeline["cu_plans"]),
+            "total_capacity_ues":     sum(c["max_ues"] for c in active_covering),
+            "estimated_cost_usd":     0.0,
             "budget_utilisation_pct": 0.0,
-            "placement_method":      "power_rebalance",
-            "sufficiency_analysis":  sa,
+            "placement_method":       "power_rebalance",
+            "sufficiency_analysis":   sa,
         },
     }
 
@@ -424,7 +537,6 @@ def _deploy_plan(
     area_meta: dict | None = None,
 ) -> dict:
     """Select new cells via heuristic and run the full pipeline."""
-    # Proximity pre-filter: restrict candidates to those near the target area.
     if area_meta:
         max_dist = area_meta["radius_km"] + 0.5
         candidate_pool = [
@@ -451,7 +563,7 @@ def _deploy_plan(
         is_new=True,
     )
 
-    estimated_cost   = estimate_cost(
+    estimated_cost = estimate_cost(
         len(cells), len(pipeline["du_plans"]), len(pipeline["cu_plans"])
     )
 
@@ -468,15 +580,298 @@ def _deploy_plan(
         "dus":              pipeline["du_plans"],
         "cus":              pipeline["cu_plans"],
         "summary": {
-            "n_cells":               len(cells),
-            "n_new_cells":           len(cells),
-            "n_dus":                 len(pipeline["du_plans"]),
-            "n_cus":                 len(pipeline["cu_plans"]),
-            "total_capacity_ues":    sum(c["max_ues"] for c in cells),
-            "estimated_cost_usd":    estimated_cost,
+            "n_cells":                len(cells),
+            "n_new_cells":            len(cells),
+            "n_dus":                  len(pipeline["du_plans"]),
+            "n_cus":                  len(pipeline["cu_plans"]),
+            "total_capacity_ues":     sum(c["max_ues"] for c in cells),
+            "estimated_cost_usd":     estimated_cost,
             "budget_utilisation_pct": round(estimated_cost / req.deployment_budget * 100, 1),
-            "placement_method":      "heuristic",
-            "sufficiency_analysis":  sa,
+            "placement_method":       "heuristic",
+            "sufficiency_analysis":   sa,
+        },
+    }
+
+
+def _suspend_plan(
+    req: PlanRequest,
+    sa: dict,
+    active_covering: list[dict],
+    traffic: dict,
+    lat_constraints: dict,
+) -> dict:
+    """
+    Identify minimum cells needed to meet required demand; mark the rest suspended.
+
+    Strategy: sort active cells by max_ues descending; greedily keep cells until
+    Σ max_ues >= required_ues * MIN_CAPACITY_BUFFER (10 % headroom). Suspend the rest.
+    At least MIN_ACTIVE_CELLS (1) cell always stays active.
+
+    Suspension events are written to InfluxDB so they can be retrieved later.
+    Suspended cells are excluded from the topology written by plan_to_topology
+    (they are listed in the plan for transparency but not deployed to the Controller).
+    """
+    required_ues = sa["required_ues"]
+    keep_target  = required_ues * MIN_CAPACITY_BUFFER
+
+    sorted_cells = sorted(active_covering, key=lambda c: c.get("max_ues", 0), reverse=True)
+
+    kept       = []
+    to_suspend = []
+    running    = 0
+    for c in sorted_cells:
+        if running < keep_target or len(kept) < MIN_ACTIVE_CELLS:
+            kept.append({**c, "active": True})
+            running += c.get("max_ues", 0)
+        else:
+            to_suspend.append({**c, "active": False})
+
+    plan_id = str(uuid.uuid4())[:8]
+
+    if to_suspend:
+        _write_suspension_events(to_suspend, req.geographic_area, "suspended", plan_id)
+
+    keep_pcis = {c["cell_id"]: c["_existing_pci"] for c in kept}
+    pipeline  = _run_pipeline(
+        cells=kept,
+        traffic=traffic,
+        lat_constraints=lat_constraints,
+        spectrum_bands=req.spectrum_bands,
+        max_cells_per_du=req.max_cells_per_du,
+        max_dus_per_cu=req.max_dus_per_cu,
+        is_new=False,
+        keep_pcis=keep_pcis,
+    )
+
+    # Suspended cells included in plan cells list for transparency (but not in topology)
+    suspended_cell_entries = [
+        {
+            **{k: v for k, v in c.items() if not k.startswith("_")},
+            "active":            False,
+            "suspended_reason":  "demand_reduction",
+        }
+        for c in to_suspend
+    ]
+
+    return {
+        "plan_id":          plan_id,
+        "plan_type":        "suspend",
+        "planning_method":  "suspension",
+        "timestamp":        datetime.now(timezone.utc).isoformat(),
+        "geographic_area":  req.geographic_area,
+        "timing_sync":      pipeline["timing_sync"],
+        "pci_violations":   pipeline["violations"],
+        "cells":            pipeline["cell_plans"] + suspended_cell_entries,
+        "dus":              pipeline["du_plans"],
+        "cus":              pipeline["cu_plans"],
+        "suspended_cells":  [c["cell_id"] for c in to_suspend],
+        "summary": {
+            "n_cells":                len(active_covering),
+            "n_cells_kept_active":    len(kept),
+            "n_cells_suspended":      len(to_suspend),
+            "n_new_cells":            0,
+            "n_dus":                  len(pipeline["du_plans"]),
+            "n_cus":                  len(pipeline["cu_plans"]),
+            "total_capacity_ues":     sum(c.get("max_ues", 0) for c in kept),
+            "estimated_cost_usd":     0.0,
+            "budget_utilisation_pct": 0.0,
+            "placement_method":       "suspension",
+            "sufficiency_analysis":   sa,
+        },
+    }
+
+
+def _reactivate_plan(
+    req: PlanRequest,
+    sa: dict,
+    active_covering: list[dict],
+    suspended_cells: list[dict],
+    traffic: dict,
+    lat_constraints: dict,
+) -> dict:
+    """
+    Reactivate the minimum subset of suspended cells to meet required demand.
+
+    Sort suspended cells by max_ues descending; greedily wake them until
+    deployed_ues + Σ reactivated max_ues >= required_ues.
+    Writes reactivation events to InfluxDB.
+    """
+    required_ues = sa["required_ues"]
+    deployed_ues = sa["active_capacity"]
+    deficit      = required_ues - deployed_ues
+
+    sorted_suspended = sorted(suspended_cells, key=lambda c: c.get("max_ues", 0), reverse=True)
+
+    to_reactivate = []
+    covered       = 0
+    for c in sorted_suspended:
+        if covered >= deficit:
+            break
+        to_reactivate.append(c)
+        covered += c.get("max_ues", 0)
+
+    plan_id = str(uuid.uuid4())[:8]
+
+    if to_reactivate:
+        _write_suspension_events(to_reactivate, req.geographic_area, "reactivated", plan_id)
+
+    # Prepare reactivated cells: strip event-metadata keys, ensure density_weight present
+    cleaned = []
+    for c in to_reactivate:
+        entry = {k: v for k, v in c.items() if k not in ("action", "plan_id", "geographic_area")}
+        entry["active"] = True
+        entry.setdefault("density_weight", entry.get("max_ues", 900) / 900.0)
+        cleaned.append(entry)
+
+    all_cells = active_covering + cleaned
+
+    # Preserve PCIs: active cells use _existing_pci; reactivated cells use stored pci
+    keep_pcis = {
+        c["cell_id"]: c.get("_existing_pci", c.get("pci", 0))
+        for c in all_cells
+    }
+
+    pipeline = _run_pipeline(
+        cells=all_cells,
+        traffic=traffic,
+        lat_constraints=lat_constraints,
+        spectrum_bands=req.spectrum_bands,
+        max_cells_per_du=req.max_cells_per_du,
+        max_dus_per_cu=req.max_dus_per_cu,
+        is_new=False,
+        keep_pcis=keep_pcis,
+    )
+
+    return {
+        "plan_id":           plan_id,
+        "plan_type":         "reactivate",
+        "planning_method":   "reactivation",
+        "timestamp":         datetime.now(timezone.utc).isoformat(),
+        "geographic_area":   req.geographic_area,
+        "timing_sync":       pipeline["timing_sync"],
+        "pci_violations":    pipeline["violations"],
+        "cells":             pipeline["cell_plans"],
+        "dus":               pipeline["du_plans"],
+        "cus":               pipeline["cu_plans"],
+        "reactivated_cells": [c["cell_id"] for c in to_reactivate],
+        "summary": {
+            "n_cells":                len(all_cells),
+            "n_new_cells":            0,
+            "n_reactivated_cells":    len(to_reactivate),
+            "n_dus":                  len(pipeline["du_plans"]),
+            "n_cus":                  len(pipeline["cu_plans"]),
+            "total_capacity_ues":     sum(c.get("max_ues", 0) for c in all_cells),
+            "estimated_cost_usd":     0.0,
+            "budget_utilisation_pct": 0.0,
+            "placement_method":       "reactivation",
+            "sufficiency_analysis":   sa,
+        },
+    }
+
+
+def _reactivate_and_deploy_plan(
+    req: PlanRequest,
+    sa: dict,
+    active_covering: list[dict],
+    suspended_cells: list[dict],
+    traffic: dict,
+    lat_constraints: dict,
+    area_meta: dict | None = None,
+) -> dict:
+    """
+    Reactivate ALL suspended cells for the area, then deploy new cells for the
+    remaining deficit.  PCI assignment is done fresh across all cells (active +
+    reactivated + new) since the mixed pool makes preservation impractical.
+    """
+    plan_id = str(uuid.uuid4())[:8]
+
+    if suspended_cells:
+        _write_suspension_events(suspended_cells, req.geographic_area, "reactivated", plan_id)
+
+    cleaned = []
+    for c in suspended_cells:
+        entry = {k: v for k, v in c.items() if k not in ("action", "plan_id", "geographic_area")}
+        entry["active"] = True
+        entry.setdefault("density_weight", entry.get("max_ues", 900) / 900.0)
+        cleaned.append(entry)
+
+    # Compute remaining deficit after full reactivation
+    total_after_reactivation = sa["active_capacity"] + sa["suspended_capacity"]
+    remaining_deficit        = sa["required_ues"] - total_after_reactivation
+
+    # Proximity pre-filter for new candidates
+    if area_meta:
+        max_dist = area_meta["radius_km"] + 0.5
+        candidate_pool = [
+            c for c in CANDIDATE_CELLS
+            if haversine_km(c["lat"], c["lon"], area_meta["lat"], area_meta["lon"]) <= max_dist
+        ] or CANDIDATE_CELLS
+        area_center = (area_meta["lat"], area_meta["lon"])
+    else:
+        candidate_pool = CANDIDATE_CELLS
+        area_center    = None
+
+    # Exclude candidates already in the active or reactivated set
+    existing_ids   = {c["cell_id"] for c in active_covering + cleaned}
+    candidate_pool = [c for c in candidate_pool if c["cell_id"] not in existing_ids]
+
+    new_cells: list[dict] = []
+    if remaining_deficit > 0 and candidate_pool:
+        delta_budget = req.deployment_budget * (remaining_deficit / max(sa["required_ues"], 1))
+        new_cells = select_cells(
+            req.expected_user_density, delta_budget, req.spectrum_bands,
+            candidate_pool=candidate_pool, area_center=area_center,
+        )
+    for c in new_cells:
+        c["active"] = True
+
+    all_cells = active_covering + cleaned + new_cells
+
+    # Fresh PCI assignment for the whole mixed pool (keep_pcis=None)
+    pipeline = _run_pipeline(
+        cells=all_cells,
+        traffic=traffic,
+        lat_constraints=lat_constraints,
+        spectrum_bands=req.spectrum_bands,
+        max_cells_per_du=req.max_cells_per_du,
+        max_dus_per_cu=req.max_dus_per_cu,
+        is_new=False,
+        keep_pcis=None,
+    )
+
+    # Mark newly deployed cells as is_new=True
+    new_ids = {c["cell_id"] for c in new_cells}
+    for cp in pipeline["cell_plans"]:
+        if cp["cell_id"] in new_ids:
+            cp["is_new"] = True
+
+    estimated_cost = estimate_cost(
+        len(new_cells), len(pipeline["du_plans"]), len(pipeline["cu_plans"])
+    )
+
+    return {
+        "plan_id":           plan_id,
+        "plan_type":         "reactivate_and_deploy",
+        "planning_method":   "reactivation_and_heuristic",
+        "timestamp":         datetime.now(timezone.utc).isoformat(),
+        "geographic_area":   req.geographic_area,
+        "timing_sync":       pipeline["timing_sync"],
+        "pci_violations":    pipeline["violations"],
+        "cells":             pipeline["cell_plans"],
+        "dus":               pipeline["du_plans"],
+        "cus":               pipeline["cu_plans"],
+        "reactivated_cells": [c["cell_id"] for c in suspended_cells],
+        "summary": {
+            "n_cells":                len(all_cells),
+            "n_new_cells":            len(new_cells),
+            "n_reactivated_cells":    len(suspended_cells),
+            "n_dus":                  len(pipeline["du_plans"]),
+            "n_cus":                  len(pipeline["cu_plans"]),
+            "total_capacity_ues":     sum(c.get("max_ues", 0) for c in all_cells),
+            "estimated_cost_usd":     estimated_cost,
+            "budget_utilisation_pct": round(estimated_cost / max(req.deployment_budget, 1) * 100, 1),
+            "placement_method":       "reactivation_and_heuristic",
+            "sufficiency_analysis":   sa,
         },
     }
 
@@ -484,9 +879,9 @@ def _deploy_plan(
 def plan_to_topology(plan: dict) -> dict:
     """Convert a network plan into topology.json format used by the Controller.
 
-    Preserves all hardware fields (vendor, hardware_model, generation,
-    antenna_config, tx_power_w, idle_power_w, peak_dl_mbps) so that DU
-    simulators receive correct specs after a plan is applied.
+    Suspended cells (active=False) are excluded — they exist only in InfluxDB.
+    The DU simulator never sees them; they are invisible to the live network
+    until a reactivate plan re-adds them to a DU's cell_ids.
     """
     cus, dus, cells_topo = {}, {}, {}
 
@@ -503,6 +898,8 @@ def plan_to_topology(plan: dict) -> dict:
             "cell_ids": du["cell_ids"],
         }
     for c in plan["cells"]:
+        if not c.get("active", True):
+            continue   # suspended cells are not written to topology
         cells_topo[c["cell_id"]] = {
             "area":           c["area"],
             "pci":            c["pci"],
@@ -591,7 +988,6 @@ from(bucket: "{INFLUX_BUCKET}")
         return {"plans": rows, "count": len(rows)}
     except Exception as exc:
         log.warning("InfluxDB list_plans query failed: %s", exc)
-        # Fall back to session cache
         return {
             "plans": [
                 {"plan_id": p["plan_id"], "plan_type": p["plan_type"],
@@ -601,6 +997,40 @@ from(bucket: "{INFLUX_BUCKET}")
             "count": len(_plans),
             "source": "session_cache",
         }
+
+
+@app.get("/cells/suspended")
+def list_suspended_cells(area: Optional[str] = None):
+    """List currently suspended cells across all areas, or filtered by ?area=."""
+    flux = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -36500d)
+  |> filter(fn: (r) => r._measurement == "suspended_cells")
+  |> filter(fn: (r) => r._field == "cell_json")
+  |> group(columns: ["cell_id"])
+  |> last()
+"""
+    cells = []
+    try:
+        tables = _get_influx().query_api().query(flux, org=INFLUX_ORG)
+        for table in tables:
+            for rec in table.records:
+                cell_data = json.loads(rec.get_value())
+                if cell_data.get("action") == "suspended":
+                    cells.append(cell_data)
+    except Exception as exc:
+        log.warning("InfluxDB list_suspended_cells failed: %s", exc)
+        return {"suspended_cells": [], "count": 0}
+
+    if area:
+        q = area.lower()
+        cells = [
+            c for c in cells
+            if q in c.get("geographic_area", "").lower()
+            or q in c.get("area", "").lower()
+        ]
+
+    return {"suspended_cells": cells, "count": len(cells)}
 
 
 @app.post("/plan")

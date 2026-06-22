@@ -170,7 +170,7 @@ def apply_plan(plan_id: str) -> dict:
     return _plan("/plan/apply", "POST", {"plan_id": plan_id})
 
 
-def query_ue(ue_id: str = "", cell_id: str = "", last_minutes: int = 30) -> list:
+def query_ue(ue_id: str = "", cell_id: str = "", last_minutes: int = 10) -> list:
     """
     Query per-UE usage and mobility events from InfluxDB.
     Filter by ue_id or cell_id; returns both ue_usage and ue_mobility records.
@@ -316,6 +316,17 @@ def remove_cell(cell_id: str) -> dict:
     return _ctrl(f"/cells/{cell_id}", "DELETE")
 
 
+def list_suspended_cells(area: str = "") -> dict:
+    """
+    List cells that are currently suspended (hardware present, not transmitting).
+    Use this before calling plan_network to understand whether previously suspended
+    cells exist and could be reactivated instead of deploying new hardware.
+    Optionally filter by area name or area_id.
+    """
+    path = f"/cells/suspended{'?area=' + area if area else ''}"
+    return _plan(path)
+
+
 def get_alerts(severity: str = "", last_minutes: int = 60) -> list:
     """
     Retrieve recent KPI alerts from InfluxDB.
@@ -454,6 +465,26 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "list_suspended_cells",
+        "description": (
+            "List cells that are currently suspended — hardware is installed but not transmitting "
+            "due to a previous suspend plan. Call this BEFORE plan_network when an operator reports "
+            "that demand has increased, so the planner knows whether to reactivate existing hardware "
+            "instead of deploying new sites. Returns cell_id, area, max_ues, band, and the plan_id "
+            "that caused the suspension. Optionally filter by area name or area_id."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area": {
+                    "type": "string",
+                    "description": "Area name or area_id to filter (e.g. 'MLS-RWS'). Omit for all areas.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_alerts",
         "description": "Retrieve recent KPI alerts detected by the KPI agent (overloads, SINR degradation, power waste, underload).",
         "input_schema": {
@@ -556,6 +587,7 @@ TOOL_MAP = {
     "apply_plan":                lambda args: apply_plan(**args),
     "get_alerts":                lambda args: get_alerts(**args),
     "query_ue":                  lambda args: query_ue(**args),
+    "list_suspended_cells":      lambda args: list_suspended_cells(**args),
     "get_son_status":            lambda args: get_son_status(**args),
     "add_cell":                  lambda args: add_cell(**args),
     "remove_cell":               lambda args: remove_cell(**args),

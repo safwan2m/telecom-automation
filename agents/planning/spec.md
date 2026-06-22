@@ -1,6 +1,6 @@
 # Planning Engine — Specification
 
-FastAPI service on port 8081. Accepts deployment parameters, decides whether existing cells can satisfy demand or new infrastructure is required, then generates a complete conflict-free plan. All plan types return an identical schema. Plans are stored in-memory until applied.
+FastAPI service on port 8081. Accepts deployment parameters, analyses the live network, and generates a conflict-free plan. Five plan types are supported: `reorganize`, `deploy`, `suspend`, `reactivate`, `reactivate_and_deploy`. All share an identical top-level schema. Plans are persisted in InfluxDB.
 
 ## Dependencies
 
@@ -67,40 +67,79 @@ Step 2 — Sufficiency analysis  (query Controller /network for live state)
       │                     — falls back to all live cells if area not in MALLESWARAM_AREAS
       │    deployed_ues   = Σ max_ues  for cells in covering_cells
       │
-      │  Decision:
-      │    deployed_ues ≥ required_ues
-      │        → Reorganize mode  (no new cells; adjust DU assignments + slices)
-      │    otherwise
-      │        → Deploy mode  (new cells required)
+      │  Split covering_cells by active flag:
+      │    active_covering  = [c for c in covering_cells if c.active != false]
+      │    deployed_ues     = Σ max_ues for cells in active_covering
       │
-      ├─────────────────────────────────┬─────────────────────────────────────
-      │                                 │
-      ▼                                 ▼
-Reorganize mode                    Deploy mode
-      │                                 │
-      │ 1. Power optimization           ├─ Single-period  (POST /plan)
-      │    compute optimal tx_power_w   │    Candidate pre-filter:
-      │    per existing cell to meet    │      if area in MALLESWARAM_AREAS:
-      │    coverage without SINR clash  │        keep CANDIDATE_CELLS within
-      │                                 │        area.radius_km + 0.5 km of center
-      │ 2. Load rebalancing             │      else: use all CANDIDATE_CELLS
-      │    compute new DU assignments   │    heuristic: proximity-then-density score
-      │    to equalise PRB across DUs   │
-      │ 3. Slice reallocation           │ Cell selection output feeds into
-      │    recompute PRB budgets per    │ the shared 8-step downstream pipeline:
-      │    traffic_profile              │
-      │                                 │  1. assign_pcis
-      │ plan_type = "reorganize"        │  2. validate_plan
-      │ is_new = false for all cells    │  3. assign_dus
-      │ n_new_cells = 0                 │  4. assign_cus
-      │                                 │  5. compute DU/CU centroids
-      │                                 │  6. timing_sync_strategy
-      │                                 │  7. allocate_slices (per cell)
-      │                                 │  8. fronthaul / midhaul latency
-      │                                 │
-      │                                 │  plan_type = "deploy"
-      │                                 │  is_new = true for selected cells
-      │                                 │
+      │  Also query InfluxDB suspended cell registry for this area:
+      │    suspended_cells = _get_suspended_cells(geographic_area)
+      │    suspended_ues   = Σ max_ues for cells in suspended_cells
+      │
+      │  Decision (top-to-bottom, first match wins):
+      │
+      │    deployed_ues ≥ required_ues × SUSPENSION_RATIO (2.0)
+      │    AND len(active_covering) > MIN_ACTIVE_CELLS (1)
+      │        → Suspend mode   (demand dropped; park excess hardware)
+      │
+      │    deployed_ues ≥ required_ues
+      │        → Reorganize mode  (sufficient capacity; rebalance only)
+      │
+      │    deployed_ues + suspended_ues ≥ required_ues
+      │        → Reactivate mode  (wake suspended cells; no new hardware)
+      │
+      │    suspended_ues > 0  (but not enough alone)
+      │        → Reactivate+Deploy mode  (wake all + deploy delta)
+      │
+      │    else
+      │        → Deploy mode  (no suspended cells; new hardware required)
+      │
+      ├──────┬──────┬──────┬──────┬──────
+      │      │      │      │      │
+      ▼      ▼      ▼      ▼      ▼
+   Suspend Reorg React  R+D   Deploy
+
+Suspend mode
+  Sort active_covering by max_ues desc.
+  Greedily keep cells until Σ max_ues ≥ required_ues × MIN_CAPACITY_BUFFER (1.1).
+  Always keep ≥ MIN_ACTIVE_CELLS (1) cell active.
+  Remaining cells → suspended (write to InfluxDB suspended_cells; exclude from topology).
+  Run _run_pipeline over kept cells only.
+  plan_type = "suspend", planning_method = "suspension"
+  suspended_cells[] in plan lists suspended cell_ids.
+
+Reorganize mode
+  Keep PCIs unchanged (keep_pcis = {cell_id: _existing_pci}).
+  Run _run_pipeline over active_covering.
+  plan_type = "reorganize", planning_method = "power_rebalance", n_new_cells = 0.
+
+Reactivate mode
+  Sort suspended_cells by max_ues desc.
+  Greedily wake cells until deployed_ues + Σ reactivated ≥ required_ues.
+  Write reactivation events to InfluxDB.
+  Merge active_covering + reactivated → _run_pipeline, preserving PCIs.
+  plan_type = "reactivate", planning_method = "reactivation"
+  reactivated_cells[] in plan lists reactivated cell_ids.
+
+Reactivate+Deploy mode
+  Reactivate ALL suspended cells. Write reactivation events to InfluxDB.
+  Compute remaining_deficit = required_ues − (deployed + suspended).
+  Select new cells for deficit from CANDIDATE_CELLS (proximity pre-filter if area known).
+  Merge active_covering + reactivated + new → _run_pipeline, fresh PCI assignment.
+  Mark new cells is_new=true in plan.
+  plan_type = "reactivate_and_deploy", planning_method = "reactivation_and_heuristic"
+
+Deploy mode
+  Candidate pre-filter: if area in MALLESWARAM_AREAS, restrict CANDIDATE_CELLS to within
+    area.radius_km + 0.5 km of center; else use all.
+  select_cells(density, budget, bands, candidate_pool, area_center) → scored + ranked.
+  Run _run_pipeline (fresh PCI assignment), is_new=true.
+  plan_type = "deploy", planning_method = "heuristic"
+
+All modes feed into:
+  _run_pipeline → 1. assign_pcis / keep_pcis  2. validate_plan  3. assign_dus
+                  4. assign_cus  5. DU/CU centroids  6. timing_sync_strategy
+                  7. allocate_slices per cell  8. fronthaul/midhaul latency
+
       └─────────────────────────────────┘
                         │
                         ▼
@@ -117,26 +156,32 @@ Step 5 — return Plan schema (see below)
 
 ## Plan schema
 
-Both `reorganize` and `deploy` modes return this identical top-level structure:
+All plan types share this top-level structure:
 
 ```json
 {
   "plan_id":          "string (8-char UUID)",
-  "plan_type":        "reorganize" | "deploy",
-  "planning_method":  "power_rebalance" | "heuristic",
+  "plan_type":        "reorganize" | "deploy" | "suspend" | "reactivate" | "reactivate_and_deploy",
+  "planning_method":  "power_rebalance" | "heuristic" | "suspension" | "reactivation" | "reactivation_and_heuristic",
   "timestamp":        "ISO-8601",
   "geographic_area":  "string",
   "timing_sync":      "IEEE-1588-PTP-Class-C" | "IEEE-1588-PTP-Class-B" | "SyncE",
   "pci_violations":   [],
+
+  "suspended_cells":   ["cell_id", ...],   // present only in suspend plans
+  "reactivated_cells": ["cell_id", ...],   // present in reactivate / reactivate_and_deploy
+
   "cells": [
     {
       "cell_id", "area", "lat", "lon", "band", "freq_mhz", "max_ues",
       "generation", "vendor", "hardware_model", "antenna_config",
       "tx_power_w", "idle_power_w", "peak_dl_mbps", "pci",
       "du_id", "cu_id", "fronthaul_latency_us",
+      "active":         true | false,      // false = suspended; absent means true
       "slices":         {"eMBB": {...}, "URLLC": {...}, "mMTC": {...}},
       "slice_warnings": [],
-      "is_new":          true | false
+      "is_new":         true | false,
+      "suspended_reason": "demand_reduction"   // present only on suspended entries
     }
   ],
   "dus": [
@@ -148,6 +193,9 @@ Both `reorganize` and `deploy` modes return this identical top-level structure:
   "summary": {
     "n_cells":                   0,
     "n_new_cells":               0,
+    "n_cells_kept_active":       0,   // suspend plans only
+    "n_cells_suspended":         0,   // suspend plans only
+    "n_reactivated_cells":       0,   // reactivate / reactivate_and_deploy plans only
     "n_dus":                     0,
     "n_cus":                     0,
     "total_capacity_ues":        0,
@@ -155,13 +203,19 @@ Both `reorganize` and `deploy` modes return this identical top-level structure:
     "budget_utilisation_pct":    0.0,
     "placement_method":          "string",
     "sufficiency_analysis": {
-      "required_ues":      0,
-      "current_capacity":  0,
-      "mode_chosen":       "reorganize" | "deploy"
+      "required_ues":       0,
+      "active_capacity":    0,   // Σ max_ues of active covering cells
+      "suspended_capacity": 0,   // Σ max_ues of suspended cells in area
+      "mode_chosen":        "reorganize" | "deploy" | "suspend" | "reactivate" | "reactivate_and_deploy"
     }
   }
 }
 ```
+
+**Notes on suspended cells in plans:**
+- Suspended cells appear in `plan["cells"]` with `active: false` for transparency, but `plan_to_topology` filters them out before writing to the Controller.
+- `dus[]` and `cus[]` only cover active cells (the pipeline runs only over kept/active cells).
+- Suspended cells are stored in InfluxDB `suspended_cells` measurement with their full hardware spec so they can be reconstructed by a future reactivate plan.
 
 ## File structure
 
@@ -423,6 +477,10 @@ HOURLY_LOAD = [          # index = hour 0–23, matches core_simulator.py
     0.65, 0.60, 0.62, 0.68, 0.78, 0.90,   # 12–17 (day)
     0.95, 1.00, 0.97, 0.88, 0.62, 0.30,   # 18–23 (peak evening)
 ]
+
+SUSPENSION_RATIO    = 2.0   # suspend when deployed_ues ≥ required_ues × 2.0
+MIN_ACTIVE_CELLS    = 1     # always keep at least 1 cell active in the area
+MIN_CAPACITY_BUFFER = 1.1   # keep 10 % headroom above required_ues when suspending
 ```
 
 ### planner_api.py — helper functions
@@ -456,18 +514,29 @@ Writes to `_plans[plan_id]` cache AND calls `_write_plan(plan)`.
 **`_fetch_plan(plan_id) → dict | None`**  
 Returns `_plans[plan_id]` if in cache; else calls `_read_plan`, warms cache on hit, returns `None` on miss.
 
-**`_sufficiency_check(req, area_meta=None) → (dict, list[dict])`**  
+**`_write_suspension_events(cells, geographic_area, action, plan_id) → None`**  
+Writes one InfluxDB point per cell to `suspended_cells` measurement. `action` = `"suspended"` or `"reactivated"`. Strips internal/computed fields; stores `pci` from `_existing_pci`. Never raises — logs WARNING on failure.
+
+**`_get_suspended_cells(geographic_area) → list[dict]`**  
+Flux query: `range(-36500d)`, filter `_measurement=="suspended_cells"`, `geographic_area==<area>`, `_field=="cell_json"`, `group(cell_id)`, `last()`. Parses `cell_json` and returns cells where `action == "suspended"`. Returns `[]` on error.
+
+**`_sufficiency_check(req, area_meta=None) → (dict, list[dict], list[dict])`**  
 Fetches live cells from `GET /network` on Controller.
 ```
-area_km2     = _area_km2(geographic_area, area_meta)
-required_ues = density × area_km2 × HOURLY_LOAD[peak_hour]
-covering     = cells_covering_area(area_meta, all_live)   # if area_meta known
-             = string-match filter on cell.area field       # fallback
-deployed_ues = Σ max_ues for covering cells
-mode         = "reorganize" if deployed_ues ≥ required_ues else "deploy"
+active_covering  = covering cells where active != false
+deployed_ues     = Σ max_ues for active_covering
+suspended_cells  = _get_suspended_cells(geographic_area)
+suspended_ues    = Σ max_ues for suspended_cells
+
+mode:
+  deployed_ues ≥ required_ues × SUSPENSION_RATIO and n_active > MIN_ACTIVE_CELLS → "suspend"
+  deployed_ues ≥ required_ues                                                      → "reorganize"
+  deployed_ues + suspended_ues ≥ required_ues                                      → "reactivate"
+  suspended_ues > 0                                                                 → "reactivate_and_deploy"
+  else                                                                              → "deploy"
 ```
-Returns `(analysis_dict, live_cells)`. `live_cells` items include `_existing_pci` for reorganize.  
-`analysis_dict` keys: `area_km2`, `required_ues`, `current_capacity`, `peak_hour`, `load_factor`, `mode_chosen`.
+Returns `(analysis_dict, active_covering, suspended_cells)`.  
+`analysis_dict` keys: `area_km2`, `required_ues`, `active_capacity`, `suspended_capacity`, `peak_hour`, `load_factor`, `mode_chosen`.
 
 **`_run_pipeline(cells, traffic, lat_constraints, spectrum_bands, max_cells_per_du, max_dus_per_cu, is_new=True, keep_pcis=None) → dict`**  
 Shared downstream pipeline run for both reorganize and deploy modes.
@@ -488,27 +557,37 @@ Returns `{cell_plans, du_plans, cu_plans, timing_sync, violations, du_cells}`.
 ### planner_api.py — planning logic
 
 **`generate_plan(req) → dict`**  
-Entry point. Calls `_resolve_area`, `_sufficiency_check`, then routes to `_reorganize_plan` or `_deploy_plan`.
+Entry point. Calls `_resolve_area`, `_sufficiency_check`, then routes to one of the five plan functions based on `sa["mode_chosen"]`.
 
-**`_reorganize_plan(req, sa, live_cells, traffic, lat_constraints) → dict`**  
-Rebalances DU/CU assignments and slice allocations for existing cells.  
+**`_reorganize_plan(req, sa, active_covering, traffic, lat_constraints) → dict`**  
+Rebalances DU/CU assignments and slice allocations for existing active cells.  
 Passes `keep_pcis = {cell_id: _existing_pci}` to `_run_pipeline` so PCIs are preserved.  
-Returns plan with `plan_type="reorganize"`, `planning_method="power_rebalance"`, `is_new=False`.
+Returns plan with `plan_type="reorganize"`, `planning_method="power_rebalance"`, `n_new_cells=0`.
 
 **`_deploy_plan(req, sa, traffic, lat_constraints, area_meta=None) → dict`**  
 Selects new candidate cells and builds full plan.
 ```
-if area_meta:
-    candidate_pool = CANDIDATE_CELLS within (area.radius_km + 0.5) km of area center
-    (falls back to all CANDIDATE_CELLS if filter leaves none)
+candidate_pool = CANDIDATE_CELLS within (area.radius_km + 0.5) km of area center (if known)
 cells = select_cells(density, budget, bands, candidate_pool, area_center)
-plan  = _run_pipeline(cells, ..., is_new=True)
+plan  = _run_pipeline(cells, ..., is_new=True, keep_pcis=None)
 cost  = estimate_cost(n_cells, n_dus, n_cus)
 ```
 Returns plan with `plan_type="deploy"`, `planning_method="heuristic"`, `is_new=True`.
 
+**`_suspend_plan(req, sa, active_covering, traffic, lat_constraints) → dict`**  
+Sorts active_covering by max_ues descending. Keeps cells until Σ max_ues ≥ `required_ues × MIN_CAPACITY_BUFFER`, always keeping ≥ `MIN_ACTIVE_CELLS`. Calls `_write_suspension_events(to_suspend, ..., "suspended")`. Runs `_run_pipeline` over kept cells only with existing PCIs. Suspended cells are appended to `plan["cells"]` with `active=False, suspended_reason="demand_reduction"` for transparency, but `plan_to_topology` excludes them from the topology written to the Controller.
+
+**`_reactivate_plan(req, sa, active_covering, suspended_cells, traffic, lat_constraints) → dict`**  
+Sorts suspended_cells by max_ues descending. Greedily selects cells to reactivate until `deployed_ues + Σ reactivated ≥ required_ues`. Calls `_write_suspension_events(to_reactivate, ..., "reactivated")`. Merges active_covering + cleaned reactivated cells → `_run_pipeline` with `keep_pcis = {cell_id: _existing_pci or stored pci}`.  
+Returns plan with `plan_type="reactivate"`, `reactivated_cells=[...]`, `estimated_cost=0`.
+
+**`_reactivate_and_deploy_plan(req, sa, active_covering, suspended_cells, traffic, lat_constraints, area_meta) → dict`**  
+Reactivates ALL suspended cells (writes events). Computes `remaining_deficit = required_ues − (active + suspended)`. Runs `select_cells` for deficit against filtered CANDIDATE_CELLS (excluding already-active and reactivated cell_ids). Merges all three cell groups → `_run_pipeline` with `keep_pcis=None` (fresh PCI assignment). Post-processes to set `is_new=True` on newly selected cells.  
+Returns plan with `plan_type="reactivate_and_deploy"`, `reactivated_cells=[...]`, `n_new_cells=N`.
+
 **`plan_to_topology(plan) → dict`**  
 Converts a plan to `topology.json` format for `POST /topology/replace` on Controller.  
+Filters `plan["cells"]` to only include entries where `c.get("active", True)` is truthy — suspended cells (active=False) are excluded.  
 Structure: `{version:1, last_updated, updated_by, cus:{cu_id:{du_ids}}, dus:{du_id:{cu_id, cell_ids}}, cells:{cell_id:{area, pci, lat, lon, band, freq_mhz, max_ues, generation, vendor, hardware_model, antenna_config, tx_power_w, idle_power_w, peak_dl_mbps}}}`.
 
 ## Plan persistence
@@ -519,22 +598,50 @@ Plans are written to InfluxDB measurement `plans` on creation and read back on `
 |---|---|---|
 | `plan_json` | string field | Full plan JSON (serialized) |
 | `geographic_area` | string field | Area name (indexed for list queries) |
-| `planning_method` | string field | `power_rebalance` or `heuristic` |
+| `planning_method` | string field | e.g. `power_rebalance`, `heuristic`, `suspension` |
 | `plan_id` | tag | 8-char UUID — used for Flux filter |
-| `plan_type` | tag | `reorganize` or `deploy` |
+| `plan_type` | tag | `reorganize` \| `deploy` \| `suspend` \| `reactivate` \| `reactivate_and_deploy` |
 
 **Retrieval strategy** (`_fetch_plan`): check in-memory `_plans` session cache first; on miss, run Flux query (`range -90d`, filter by `plan_id` tag, `plan_json` field, `last()`), deserialize, warm cache.  
 **Failure behaviour**: InfluxDB write/read failures are logged at WARNING level and do not fail the HTTP request. Plans created in the current session are always retrievable via the session cache even if InfluxDB is down.
+
+## Suspended cell registry
+
+Suspended cells are tracked in InfluxDB measurement `suspended_cells` so their hardware specs survive process restarts and are visible across reactivate plans.
+
+Each write = one lifecycle event for one cell.
+
+| Column | Kind | Value |
+|---|---|---|
+| `cell_id` | tag | e.g. `MLS_RWS_01` |
+| `geographic_area` | tag | matches `PlanRequest.geographic_area` |
+| `cell_json` | field (string) | Full cell dict JSON, including `action` (`"suspended"` or `"reactivated"`), `pci`, all hardware fields, and `plan_id`. Keys stripped before storage: `_existing_pci` (stored as `pci`), `active`, `coverage_radius_km`, `distance_to_area_km`, `area_coverage_fraction`, `slices`, `slice_warnings`, `is_new`, `du_id`, `cu_id`, `fronthaul_latency_us`. |
+| timestamp | InfluxDB time | when the event occurred |
+
+**Query for currently suspended cells in an area** — group by `cell_id`, take last event per cell, keep only those with `action == "suspended"`:
+```flux
+from(bucket: "telecom_metrics")
+  |> range(start: -36500d)
+  |> filter(fn: (r) => r._measurement == "suspended_cells")
+  |> filter(fn: (r) => r.geographic_area == "<area>")
+  |> filter(fn: (r) => r._field == "cell_json")
+  |> group(columns: ["cell_id"])
+  |> last()
+  // action == "suspended" vs "reactivated" checked in Python after parsing cell_json
+```
+
+**Failure behaviour**: `_get_suspended_cells` returns `[]` on InfluxDB error — treated as "no suspended cells", which causes the planner to fall through to deploy mode (safe but not optimal). `_write_suspension_events` logs WARNING and never raises, so suspension events that fail to write will not be tracked across restarts.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `CONTROLLER_URL` | `http://controller:8080` | sufficiency analysis (`/network`) + `plan/apply` |
-| `INFLUX_URL` | `http://influxdb:8086` | Plan persistence |
+| `INFLUX_URL` | `http://influxdb:8086` | Plan persistence + suspended cell registry |
 | `INFLUX_TOKEN` | `telecom-super-secret-auth-token-2026` | InfluxDB auth |
 | `INFLUX_ORG` | `telecom` | InfluxDB organisation |
-| `INFLUX_BUCKET` | `telecom_metrics` | Bucket for plans measurement |
+| `INFLUX_BUCKET` | `telecom_metrics` | Bucket for `plans` and `suspended_cells` measurements |
+| `SUSPENSION_RATIO` | `2.0` | Trigger threshold: suspend cells when `deployed_ues ≥ required_ues × SUSPENSION_RATIO` |
 
 ## Routes
 
@@ -547,6 +654,10 @@ GET  /areas/{area_id}/cells    accepts area_id (e.g. "MLS-RWS") OR area name sub
                                distance_to_area_km, area_coverage_fraction per cell
 GET  /candidates               list all candidate cell sites with lat/lon and area
 
+GET  /cells/suspended?area=    list currently suspended cells (all areas if ?area omitted)
+                               Returns: {"suspended_cells": [...], "count": N}
+                               Each entry: full cell dict + action + plan_id that suspended it
+
 POST /plan
      Body: {geographic_area, expected_user_density, traffic_profile,
             spectrum_bands, latency_constraints, deployment_budget}
@@ -554,9 +665,13 @@ POST /plan
        HTTP 200  {"status": "missing_fields", "missing": [...], "message": "..."}
      Returns (success):
        HTTP 200  Plan schema
-         plan_type = "reorganize" if existing cells are sufficient
-         plan_type = "deploy"     if new cells are required
-     Side-effect: plan written to InfluxDB measurement "plans"
+         plan_type = "reorganize"           existing capacity sufficient; rebalance only
+         plan_type = "deploy"               new cells required; no suspended cells available
+         plan_type = "suspend"              excess capacity; park lowest-priority cells
+         plan_type = "reactivate"           suspended cells can fill demand gap
+         plan_type = "reactivate_and_deploy" partial reactivation + new cell deployment
+     Side-effect: plan written to InfluxDB measurement "plans";
+                  suspend/reactivate events written to "suspended_cells"
 
 GET  /plans                    list persisted plans (last 90 days) sorted newest-first;
                                falls back to session cache on InfluxDB error
@@ -567,6 +682,8 @@ GET  /plan/{plan_id}           session cache first, then InfluxDB Flux query
 
 POST /plan/apply
      Body: {plan_id}
-     Action: calls POST /topology/replace on Controller with plan topology
+     Action: calls POST /topology/replace on Controller with plan topology.
+             Suspended cells (active=false) are excluded from topology — they live
+             only in InfluxDB until a reactivate plan restores them to a DU's cell_ids.
      Returns: Controller's topology/replace response
 ```
