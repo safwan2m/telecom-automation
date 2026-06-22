@@ -1,0 +1,5 @@
+pytest>=8.0
+pytest-mock>=3.0
+httpx>=0.27
+fastapi>=0.115
+influxdb-client>=1.44
