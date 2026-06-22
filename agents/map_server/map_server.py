@@ -116,10 +116,36 @@ MAP_HTML = """<!DOCTYPE html>
   .popup-val { color: #e0e0e0; font-weight: 500; }
   .overload { color: #f87171 !important; font-weight: 700; }
 
+  /* ── resize handle ── */
+  #resize-handle {
+    width: 5px;
+    cursor: col-resize;
+    background: #2d3142;
+    flex-shrink: 0;
+    position: relative;
+    transition: background 0.15s;
+    z-index: 10;
+  }
+  #resize-handle:hover, #resize-handle.dragging { background: #2563eb; }
+  #resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 1px;
+    height: 36px;
+    background: #60a5fa;
+    border-radius: 1px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  #resize-handle:hover::after, #resize-handle.dragging::after { opacity: 1; }
+
   /* ── chat panel ── */
   #chat-panel {
     width: 380px;
-    min-width: 380px;
+    min-width: 280px;
     display: flex;
     flex-direction: column;
     background: #141720;
@@ -321,6 +347,7 @@ MAP_HTML = """<!DOCTYPE html>
 
 <div id="content-wrapper">
   <div id="map"></div>
+  <div id="resize-handle" title="Drag to resize chat panel"></div>
 
   <!-- ── AI Chat Panel ── -->
   <div id="chat-panel">
@@ -745,6 +772,39 @@ async function checkOrchHealth() {
     status.style.color = '#6b7280';
   }
 }
+
+// ── Resize handle ────────────────────────────────────────────────────────────
+const resizeHandle = document.getElementById('resize-handle');
+const chatPanel    = document.getElementById('chat-panel');
+let isResizing = false, resizeStartX = 0, resizeStartW = 0;
+
+resizeHandle.addEventListener('mousedown', e => {
+  if (chatCollapsed) return;
+  isResizing   = true;
+  resizeStartX = e.clientX;
+  resizeStartW = chatPanel.offsetWidth;
+  resizeHandle.classList.add('dragging');
+  document.body.style.cursor    = 'col-resize';
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', e => {
+  if (!isResizing) return;
+  const dx = resizeStartX - e.clientX;
+  const newW = Math.min(Math.max(resizeStartW + dx, 280), 700);
+  chatPanel.style.width    = newW + 'px';
+  chatPanel.style.minWidth = newW + 'px';
+});
+
+document.addEventListener('mouseup', () => {
+  if (!isResizing) return;
+  isResizing = false;
+  resizeHandle.classList.remove('dragging');
+  document.body.style.cursor     = '';
+  document.body.style.userSelect = '';
+  map.invalidateSize();
+});
 
 // Toggle collapse
 let chatCollapsed = false;
