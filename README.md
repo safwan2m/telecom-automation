@@ -1,6 +1,6 @@
 # Telecom Network Automation
 
-An AI agent system for automated 4G/5G NSA network planning, deployment, and continuous optimization across Bangalore. Accepts geographic and operational parameters and autonomously plans cell placement, applies live topology changes, monitors KPIs with a bidirectional LSTM model, and serves a live interactive map — all controllable through a natural language chat interface.
+An AI agent system for automated 4G/5G NSA network planning, deployment, and continuous optimisation over a simulated Malleswaram (North Bangalore) deployment. Accepts geographic and operational parameters and autonomously plans cell placement, applies live topology changes, monitors KPIs with a bidirectional LSTM model, and serves a live interactive map — all controllable through a natural language chat interface.
 
 Built as an IISc course project demonstrating end-to-end O-RAN-aligned network automation.
 
@@ -11,7 +11,8 @@ Built as an IISc course project demonstrating end-to-end O-RAN-aligned network a
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │               Orchestrator Agent  :8082                      │
-│          Gemini 2.5 Flash  +  tool-calling (streaming)       │
+│    Claude CLI (Docker default)  ·  Gemini API (fallback)     │
+│    16-tool calling loop  ·  streaming text/plain             │
 └────────┬───────────────┬───────────────┬─────────────────────┘
          │               │               │
   ┌──────▼──────┐  ┌─────▼──────┐  ┌────▼──────────┐
@@ -21,11 +22,14 @@ Built as an IISc course project demonstrating end-to-end O-RAN-aligned network a
          │               │              │
   ┌──────▼───────────────▼──────────────▼──────────┐
   │                 InfluxDB  :8086                 │
+  │  cell_kpi | du_kpi | cu_kpi | core_kpi         │
+  │  ue_mobility | ue_usage | alerts | son_actions  │
   └──────────────────────┬─────────────────────────┘
                          │  topology.json
            ┌─────────────┼───────────────────┐
      ┌─────▼──────┐ ┌────▼──────┐ ┌──────────▼────┐
-     │  8× DU sims│ │ 2× CU sims│ │  Core sim     │
+     │  3× DU sims│ │ 1× CU sim │ │  Core sim     │
+     │ (4G+5G RAN)│ │(RRC/PDCP) │ │  AMF/SMF/UPF  │
      └────────────┘ └───────────┘ └───────────────┘
                          │
                   ┌──────▼──────┐
@@ -34,97 +38,126 @@ Built as an IISc course project demonstrating end-to-end O-RAN-aligned network a
                   └─────────────┘
 ```
 
-### Deployment topology — South-East Bangalore Tech Corridor
+### Deployment topology — Malleswaram, North Bangalore
 
-40 cells blanket 10 areas (4 cells per area: 5G n78 + 5G n28 + 4G B3 + 4G B40), grouped into 10 DUs under 2 CUs. Active UEs peak: **1.625M** (50% of Bangalore's 13M city population at 25% operator share).
+30 cells across 10 macro tower sites (3 sectors each), grouped into 3 DUs under 1 CU. Peak active UEs: **18,400** (40,000 residents + 15% commuter overhead × 40% operator market share).
 
-| CU | DU | Area |
-|---|---|---|
-| CU-EAST | DU-EAST-1 | Whitefield |
-| CU-EAST | DU-EAST-2 | Marathahalli |
-| CU-EAST | DU-EAST-3 | KR Puram |
-| CU-EAST | DU-EAST-4 | Bellandur |
-| CU-SOUTH | DU-CENTRAL-1 | Indiranagar |
-| CU-SOUTH | DU-CENTRAL-2 | Koramangala |
-| CU-SOUTH | DU-SOUTH-1 | HSR Layout |
-| CU-SOUTH | DU-SOUTH-2 | BTM Layout |
-| CU-SOUTH | DU-SOUTH-3 | Jayanagar |
-| CU-SOUTH | DU-SOUTH-4 | Electronic City |
+| CU | DU | Sites | Cells |
+|---|---|---|---|
+| CU-MLS | DU-MLS-1 | RWS, 18C, BEL, SNK (north) | 12 |
+| CU-MLS | DU-MLS-2 | SPG, 3MN, 10C (central) | 9 |
+| CU-MLS | DU-MLS-3 | MGR, CHD, 6CR (south-west) | 9 |
+
+**Cell naming:** `MLS_<SITE>_<SECTOR>` e.g. `MLS_RWS_01`.  
+**Sector mix per site:**
+
+| Sites | Sector 1 | Sector 2 | Sector 3 |
+|---|---|---|---|
+| RWS, 18C, SNK, SPG, 10C (high-traffic) | 5G n78 3500 MHz | 5G n41 2500 MHz | 4G B3 1800 MHz |
+| BEL, 3MN, MGR, CHD, 6CR (residential) | 5G n78 3500 MHz | 4G B40 2300 MHz | 4G B3 1800 MHz |
 
 **RAN:** 4G/5G NSA — LTE anchor + 5G NR secondary, shared AMF/SMF/UPF core.  
-**Vendor split (25% each — 10 cells per vendor):**
+**Vendor split (25% each — ~7–8 cells per vendor):**
 
-| Vendor | 5G Hardware | 4G Hardware | Peak DL | Max UEs | System Power |
+| Vendor | 5G Hardware | 4G Hardware | Peak DL | Max UEs (5G) | System Power |
 |---|---|---|---|---|---|
 | Nokia | AirScale MAA 64T64R | AWHFA | 3800 Mbps | 800 | 1000 W |
 | Ericsson | AIR 6449 / AIR 3221 | RBS 6402 | 3600 Mbps | 750 | 950 W |
 | Samsung | TM500 64T64R | RRU | 3400 Mbps | 700 | 900 W |
 | ZTE | AAU 5614 | RRU | 3200 Mbps | 680 | 1000 W |
 
-All 10 DU containers stream KPIs to InfluxDB every 10 seconds. Topology changes propagate within 5 seconds.
-
 ---
 
 ## Components
 
 ### Orchestrator Agent (`agents/orchestrator/`) — port 8082
-Accepts natural language from an operator, routes to tools via Gemini function-calling, and streams responses. Injects a live network snapshot into every system prompt.
 
-**Available tools:**
+Accepts natural language, drives a multi-step tool-calling loop, and streams responses. Injects a live network snapshot into every system prompt.
+
+**Backends** (selected at startup by `CLAUDE_CLI_PATH`):
+- **Claude CLI** — active in Docker; spawns `claude -p` subprocess via `CustomAnthropicClient`
+- **Gemini** — fallback when `CLAUDE_CLI_PATH` is unset; uses `google-genai` SDK
+
+**16 available tools:**
 
 | Tool | What it does |
 |---|---|
 | `query_network` | Full topology + live KPIs for all cells, DUs, CUs |
 | `list_cells` | Filtered cell list (by area / DU / CU) |
-| `query_cell` | 30-minute KPI time series for one cell |
-| `move_cell` | Move a cell to a different DU (live, ~5 s propagation) |
+| `query_cell` | Single cell config + 30-min KPI time series |
+| `move_cell` | Move a cell to a different DU (~5 s propagation) |
 | `move_du` | Reassign a DU to a different CU |
-| `plan_network` | Run planning engine → returns full network plan |
-| `apply_plan` | Push an accepted plan to the Controller |
+| `list_areas` | All named Malleswaram sub-locality areas with lat/lon |
+| `get_area_cells` | Deployed cells covering ≥20% of a named area |
+| `list_suspended_cells` | Cells with hardware installed but not transmitting |
+| `plan_network` | Run planning engine → returns a network plan |
+| `apply_plan` | Push an accepted plan to the Controller as live topology |
 | `get_alerts` | Recent KPI alerts from InfluxDB |
+| `query_ue` | Per-UE usage (DL/UL, latency) and mobility (handovers) |
+| `get_son_status` | SON action summary + recent autonomous actions |
+| `add_cell` | Deploy a new cell via chat (PCI auto-assigned) |
+| `remove_cell` | Decommission a cell from the live topology |
+| `optimize_congestion` | Cells ranked by multi-factor congestion score with neighbour hints |
 
 ### Controller Agent (`agents/controller/`) — port 8080
-Single control plane and source of truth (backed by `topology.json`). Merges live KPIs from InfluxDB into every GET response. Atomic topology writes propagate to all DU/CU containers.
+
+Single control plane and sole writer of `topology.json`. Merges live KPIs from InfluxDB into every GET response. Atomic topology writes (`.tmp` → rename) propagate to all DU/CU simulators within 5 seconds.
 
 ### Planning Agent (`agents/planning/`) — port 8081
-Takes network parameters and runs four algorithms in sequence:
-1. **Placement** — density-weighted heuristic with Haversine distance
-2. **PCI planner** — graph-coloring (collision and confusion free)
-3. **Slice allocator** — PRB budget per slice (eMBB / URLLC / mMTC)
-4. **DU/CU grouping** — geographic proximity with configurable capacity limits
+
+Takes network parameters and runs a pipeline in sequence:
+1. **Sufficiency check** — reorganise existing cells vs. deploy new ones
+2. **Placement** — heuristic or MIP-based site selection
+3. **PCI planner** — graph-colouring (collision and confusion-free)
+4. **Slice allocator** — PRB budget per slice (eMBB / URLLC / mMTC)
+5. **DU/CU grouping** — geographic proximity with configurable capacity limits
+
+Supports five plan types: `reorganize`, `deploy`, `suspend`, `reactivate`, `reactivate_and_deploy`.
 
 ### KPI Monitoring Agent (`agents/kpi_agent/`) — background
-Polls InfluxDB every 30 seconds. Maintains a 6-step (60 s) sliding window per cell and classifies state using a local bidirectional LSTM model. Takes autonomous corrective actions.
+
+Polls InfluxDB every 30 seconds (Docker). Maintains a 6-step (60 s) sliding window per cell and classifies state using a local bidirectional LSTM model.
 
 **AI model — bidirectional LSTM classifier:**
-- Input: 6 consecutive KPI readings × 6 features = 60 seconds of history per cell
-- Features: `prb_dl_pct`, `sinr_db`, `connected_ues`, `power_w`, `packet_loss_pct`, `dl_throughput_mbps`
-- Architecture: 2-layer BiLSTM (hidden=64) → MLP head → 5-class softmax
+- Input: 6 consecutive KPI readings × **9 features** = 60 seconds of history per cell
+- Features: `prb_dl_pct`, `sinr_db`, `connected_ues`, `power_w`, `packet_loss_pct`, `dl_throughput_mbps`, `cqi`, `bler_pct`, `latency_ms`
+- Architecture: 2-layer BiLSTM (hidden=64) → Linear(128→64) → ReLU → Dropout → Linear(64→5)
 - Classes: `NORMAL`, `OVERLOAD`, `UNDERLOAD`, `SINR_LOW`, `POWER_WASTE`
-- Trained from synthetic data at container startup (~3 min); weights cached to `kpi_model.pt`
+- Trained on 5,000 synthetic sequences (70%/15%/8%/5%/2% split) at container startup; weights cached to `kpi_model.pt`
 - Falls back to rule-based detection (tagged `[RULE]`) for first 60 s; switches to model (tagged `[AI]`) once buffer fills
 
-**Autonomous actions:**
-- `OVERLOAD` (PRB > 85%) → calls `POST /move/cell` to rebalance load
-- `SINR_LOW` (SINR < 5 dB) → writes `CRITICAL` alert
-- `UNDERLOAD` (PRB < 20%) → writes `INFO` alert (sleep candidate)
-- `POWER_WASTE` (high power, very few UEs) → writes `WARNING` alert
+**Autonomous SON actions:**
+
+| Class | Condition | Action |
+|---|---|---|
+| `OVERLOAD` | PRB > 85% | 1st: steer load to neighbour cell (NEIGHBOR_LOAD_STEER); 2nd (score > 0.75): move cell to lightest DU (LOAD_BALANCE) |
+| `NORMAL` | congestion score > 0.65 | Pre-emptive SON write (PRE_EMPTIVE_STEER) before threshold breach |
+| `UNDERLOAD` | PRB < 20% | Write INFO alert; recommend handing UEs to lightest DU for DTX/sleep (TRAFFIC_STEER) |
+| `SINR_LOW` | SINR < 5 dB | Write CRITICAL alert; request PCI re-optimisation (PCI_REOPT_REQUEST) |
+| `POWER_WASTE` | power > 500 W, UEs < 15 | Write WARNING alert; recommend DTX mode (DTX_RECOMMEND) |
+
+Cooldown gate: 300 s between SON actions on the same cell (configurable via `SON_COOLDOWN_SEC`).
 
 ### Map Server (`agents/map_server/`) — port 8083
-Serves a Leaflet.js interactive map of all 40 cells in the South-East Tech Corridor on a dark Bangalore basemap. Auto-refreshes every 30 seconds. Filter by vendor or generation; click any cell for full KPI details.
 
-- **Colour by vendor:** Nokia=blue, Ericsson=green, Samsung=purple, ZTE=orange
-- **Opacity by generation:** 5G NR = solid, 4G LTE = faded
+Serves a Leaflet.js interactive map of all 30 Malleswaram cells on a dark basemap. Auto-refreshes every 30 seconds. Includes an integrated AI chat panel (proxied to the Orchestrator).
+
+- **Colour by vendor:** Nokia=blue (#60a5fa), Ericsson=green (#4ade80), Samsung=purple (#a78bfa), ZTE=orange (#fb923c)
+- **Opacity by generation:** 5G NR = solid (0.9), 4G LTE = faded (0.55)
 - **Status fill:** red = overloaded (PRB > 85%), amber = SINR low (< 5 dB)
-- **Click popup:** vendor, hardware model, band, DU/CU, PCI, connected UEs, PRB, SINR, RSRP, power, throughput
+- **Coverage circles:** COST-231-Hata radius per cell; live KPI override when within ×0.5–2.0 of model estimate
+- **Click popup:** vendor, hardware model, band, DU/CU, PCI, UEs, PRB, SINR, RSRP, power, throughput
+- **Filter controls:** 5G/4G and all four vendors; updates in-place
+- **AI chat panel:** collapsible right-side panel with shortcut buttons; proxied to Orchestrator
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
+
 - Docker Desktop (with Compose v2)
-- Google AI Studio API key (free tier): [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+- Google AI Studio API key (free tier) — for Gemini fallback backend
 
 ### 1. Configure environment
 
@@ -133,14 +166,17 @@ cp dev-env/.env.example dev-env/.env
 # Edit dev-env/.env and fill in all values
 ```
 
-```
+```env
 INFLUXDB_ADMIN_USER=admin
 INFLUXDB_ADMIN_PASSWORD=yourpassword
 INFLUXDB_ORG=telecom
 INFLUXDB_BUCKET=telecom_metrics
-INFLUXDB_TOKEN=your-influxdb-token
+INFLUXDB_TOKEN=telecom-super-secret-auth-token-2026
 GRAFANA_PASSWORD=yourpassword
-GOOGLE_API_KEY=your-google-api-key
+GOOGLE_API_KEY=your-google-api-key        # Gemini fallback
+LANGCHAIN_API_KEY=your-langsmith-key      # optional — LangSmith tracing
+LANGCHAIN_TRACING_V2=true                 # set false to disable tracing
+LANGCHAIN_PROJECT=telecom-automation
 ```
 
 ### 2. Start the stack
@@ -150,20 +186,21 @@ cd dev-env
 docker compose up --build
 ```
 
-First startup builds all images and trains the KPI LSTM model (~3 minutes). All 20 containers start in dependency order.
+First startup builds all images and trains the KPI LSTM model (~3 minutes). All 12 containers start in dependency order.
 
 | Service | URL |
 |---|---|
-| Live cell map | http://localhost:8083 |
-| Chat interface | `py chat.py` or `POST http://localhost:8082/chat` |
+| Live cell map + AI chat | http://localhost:8083 |
+| Terminal chat client | `py chat.py` |
 | Grafana dashboards | http://localhost:3000 (admin / your password) |
 | Controller API | http://localhost:8080 |
 | Planning API | http://localhost:8081 |
+| Orchestrator API | http://localhost:8082 |
 | InfluxDB UI | http://localhost:8086 |
 
 ### 3. Open the map
 
-Navigate to **http://localhost:8083** to see all 40 cells plotted on the South-East Bangalore Tech Corridor with live KPI colour coding. The page auto-refreshes every 30 seconds.
+Navigate to **http://localhost:8083** to see all 30 Malleswaram cells with live KPI colour coding, coverage circles, and an integrated AI chat panel.
 
 ### 4. Chat with the network
 
@@ -173,8 +210,8 @@ py chat.py
 
 ```
 > show me all overloaded cells
-> move BLR_KRM_01 to DU-CENTRAL-2
-> plan a network for Electronic City with 1000 users/km²
+> move MLS_RWS_01 to DU-MLS-2
+> plan a network for Malleswaram with 800 users/km²
 > apply the plan
 > show CRITICAL alerts from the last 2 hours
 ```
@@ -182,7 +219,7 @@ py chat.py
 Or via HTTP:
 
 ```bash
-curl -N -X POST http://localhost:8082/chat \
+curl -X POST http://localhost:8082/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "show network status", "session_id": "ops1"}'
 ```
@@ -193,39 +230,55 @@ curl -N -X POST http://localhost:8082/chat \
 
 ### Orchestrator (`localhost:8082`)
 ```
-POST   /chat          {"message": "...", "session_id": "default"}  → streaming text
-GET    /history?session_id=default
-DELETE /history?session_id=default
-GET    /tools
-GET    /health
+POST   /chat          {"message": "...", "session_id": "default"}  → streaming text/plain
+GET    /history?session_id=
+DELETE /history?session_id=
+GET    /tools         → [{name, description}, ...]  (16 tools)
+GET    /health        → {status, model, backend}
 ```
 
 ### Controller (`localhost:8080`)
 ```
 GET    /health
-GET    /topology                           raw topology.json
-GET    /network                            full state + live KPIs
+GET    /topology                              raw topology.json
+GET    /network                               full state + live KPIs
 GET    /cells?area=&du_id=&cu_id=
-GET    /cells/{cell_id}                    30-min KPI time series
+GET    /cells/{cell_id}                       config + 30-min KPI series
 GET    /dus
 GET    /cus
-POST   /move/cell   {"cell_id":"...", "to_du_id":"..."}
-POST   /move/du     {"du_id":"...",   "to_cu_id":"..."}
+GET    /neighbors/{cell_id}?max_neighbors=6   Haversine nearest cells
+GET    /congestion                            cells ranked by congestion score
+
+POST   /move/cell          {"cell_id", "to_du_id"}
+POST   /move/du            {"du_id", "to_cu_id"}
+POST   /topology/replace   {"cus", "dus", "cells"}
+POST   /cells/add          {cell_id, du_id, area, lat, lon, ...}
+DELETE /cells/{cell_id}
 ```
 
-### Planning Agent (`localhost:8081`)
+### Planning API (`localhost:8081`)
 ```
-POST   /plan          {geographic_area, expected_user_density, traffic_profile,
-                       spectrum_bands, latency_constraints, compute_resources, deployment_budget}
-POST   /plan/apply    {"plan_id": "..."}
-GET    /plan/{id}
 GET    /health
+GET    /candidates
+GET    /areas
+GET    /areas/{area_id}/cells
+GET    /plan/{id}
+POST   /plan                {geographic_area, expected_user_density, traffic_profile,
+                             spectrum_bands, latency_constraints, deployment_budget}
+POST   /plan/multi-period   {..., demand_mode, time_periods}
+POST   /plan/apply          {"plan_id": "..."}
+GET    /cells/suspended
 ```
 
 ### Map Server (`localhost:8083`)
 ```
-GET    /             Leaflet map HTML (auto-refresh 30 s)
-GET    /api/cells    Cell list + live KPIs (JSON)
+GET    /                  Leaflet.js map HTML (auto-refresh 30 s)
+GET    /api/cells         cell list + coverage radii + live KPIs
+POST   /api/chat          proxy → Orchestrator /chat (120 s timeout)
+GET    /api/history       proxy → Orchestrator /history
+DELETE /api/history       proxy → Orchestrator /history
+GET    /api/tools         proxy → Orchestrator /tools
+GET    /api/orch-health   proxy → Orchestrator /health
 GET    /health
 ```
 
@@ -238,20 +291,23 @@ GET    /health
   → calls query_network, summarises cells by load, SINR, power
 
 > which 5G cells are overloaded right now?
-  → calls list_cells, filters by PRB > 85% and generation = 5G
+  → calls list_cells, filters by PRB > 85%
 
-> move BLR_WFD_01 to DU-EAST-2
+> move MLS_RWS_01 to DU-MLS-2
   → asks for confirmation, then calls move_cell
 
-> plan a 5G network for Whitefield with 800 users/km²,
+> plan a 5G network for Malleswaram with 800 users/km²,
   70% eMBB, 20% URLLC, budget $3M
-  → calls plan_network, summarises plan, asks if you want to apply it
+  → calls plan_network, summarises the plan, asks to apply
 
 > apply the plan
-  → calls apply_plan with the plan_id
+  → calls apply_plan with the plan_id from the previous response
 
-> show me CRITICAL alerts from the last 2 hours
-  → calls get_alerts with severity=CRITICAL, last_minutes=120
+> show CRITICAL alerts from the last 2 hours
+  → calls get_alerts(severity="CRITICAL", last_minutes=120)
+
+> are there any cells I can put to sleep?
+  → calls get_son_status + list_suspended_cells, reports UNDERLOAD candidates
 
 > which Nokia cells have the highest power draw?
   → calls query_network, filters by vendor, sorts by power_w
@@ -263,20 +319,26 @@ GET    /health
 
 | Variable | Default | Description |
 |---|---|---|
-| `GOOGLE_API_KEY` | required | Google AI Studio key for Gemini |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
+| `GOOGLE_API_KEY` | required (Gemini) | Google AI Studio key |
+| `GEMINI_MODEL` | `gemini-2.5-flash` (Docker) | Gemini model name |
+| `CLAUDE_CLI_PATH` | `/usr/bin/claude` (Docker) | Path to `claude` binary; non-empty activates Claude CLI backend |
+| `ANTHROPIC_MODEL_NAME` | `sonnet` | Claude model alias (Claude CLI backend only) |
+| `LANGCHAIN_API_KEY` | optional | LangSmith tracing key |
+| `LANGCHAIN_TRACING_V2` | `true` | Set `false` to disable LangSmith tracing |
+| `LANGCHAIN_PROJECT` | `telecom-automation` | LangSmith project name |
 | `INFLUXDB_TOKEN` | required | InfluxDB auth token |
 | `INFLUXDB_ORG` | `telecom` | InfluxDB organisation |
 | `INFLUXDB_BUCKET` | `telecom_metrics` | InfluxDB bucket |
 | `CONTROLLER_URL` | `http://controller:8080` | Controller base URL |
 | `PLANNING_URL` | `http://planning-api:8081` | Planning API base URL |
-| `POLL_INTERVAL_SEC` | `30` | KPI agent poll interval |
+| `POLL_INTERVAL_SEC` | `30` (Docker) | KPI agent poll interval |
+| `MIN_CONFIDENCE` | `0.70` | LSTM confidence gate |
+| `SON_COOLDOWN_SEC` | `300` | Min seconds between SON actions on the same cell |
 | `OVERLOAD_PRB_PCT` | `85` | PRB overload threshold |
 | `UNDERLOAD_PRB_PCT` | `20` | PRB underload threshold |
 | `SINR_MIN_DB` | `5` | SINR floor for SINR_LOW |
 | `POWER_WASTE_W` | `500` | Power threshold for POWER_WASTE |
 | `POWER_WASTE_MIN_UES` | `15` | Max UEs for POWER_WASTE trigger |
-| `MIN_CONFIDENCE` | `0.70` | LSTM confidence gate |
 
 ---
 
@@ -285,9 +347,11 @@ GET    /health
 ```
 telecom-automation/
 ├── agents/
-│   ├── orchestrator/          Gemini chat agent (FastAPI, port 8082)
-│   │   ├── orchestrator.py
-│   │   ├── tools.py
+│   ├── orchestrator/          LLM chat agent (FastAPI, port 8082)
+│   │   ├── orchestrator.py    Dual-backend chat service (Claude CLI / Gemini)
+│   │   ├── tools.py           16 tool schemas + TOOL_MAP dispatch table
+│   │   ├── custom_anthropic_client.py  claude -p subprocess bridge
+│   │   ├── tracing.py         LangSmith integration (no-op when inactive)
 │   │   ├── Dockerfile
 │   │   └── requirements.txt
 │   ├── controller/            Topology control plane (FastAPI, port 8080)
@@ -296,31 +360,32 @@ telecom-automation/
 │   │   └── requirements.txt
 │   ├── planning/              Network planning engine (FastAPI, port 8081)
 │   │   ├── planner_api.py
-│   │   ├── placement.py
-│   │   ├── pci_planner.py
-│   │   ├── slice_allocator.py
+│   │   ├── placement.py       Heuristic + DU/CU grouping
+│   │   ├── mip_placer.py      MIP-based optimal placement
+│   │   ├── pci_planner.py     Graph-colouring PCI assignment
+│   │   ├── slice_allocator.py PRB budget split (eMBB/URLLC/mMTC)
 │   │   ├── Dockerfile
 │   │   └── requirements.txt
 │   ├── kpi_agent/             KPI monitoring + BiLSTM anomaly detection (background)
-│   │   ├── kpi_agent.py
-│   │   ├── model.py
-│   │   ├── train.py
+│   │   ├── kpi_agent.py       Poll loop, feature extraction, SON dispatcher
+│   │   ├── model.py           KPIClassifier — 2-layer BiLSTM + MLP head
+│   │   ├── train.py           Synthetic dataset generation + training
 │   │   ├── Dockerfile
 │   │   └── requirements.txt
 │   └── map_server/            Leaflet.js live cell map (FastAPI, port 8083)
-│       ├── map_server.py
+│       ├── map_server.py      Inline HTML map + Orchestrator proxy routes
 │       ├── Dockerfile
 │       └── requirements.txt
 ├── dev-env/
-│   ├── docker-compose.yml     26-container stack
+│   ├── docker-compose.yml     12-container dev stack
 │   ├── .env.example           Environment variable template
 │   ├── config/
-│   │   └── topology.json      48-cell Bangalore topology (source of truth)
-│   ├── grafana/               Grafana datasource provisioning
+│   │   └── topology.json      30-cell Malleswaram topology (source of truth)
+│   ├── grafana/               Dashboard JSON + datasource provisioning
 │   └── simulators/
 │       ├── core/              AMF/SMF/UPF KPI simulator
-│       ├── cu/                CU simulator (shared image for all 2 CUs)
-│       └── du/                DU simulator (shared image for all 10 DUs)
+│       ├── cu/                CU simulator (shared image — 1 instance)
+│       └── du/                DU simulator (shared image — 3 instances)
 ├── chat.py                    Interactive terminal chat client
 ├── spec.md                    Full project specification
 ├── prerequisites.md           O-RAN and 5G background reading
@@ -336,9 +401,9 @@ telecom-automation/
 cd dev-env && docker compose up --build -d
 
 # Tail logs for a specific container
-docker logs -f kpi-agent
-docker logs -f orchestrator
-docker logs -f map-server
+docker compose logs -f kpi-agent
+docker compose logs -f orchestrator
+docker compose logs -f map-server
 
 # Stop everything
 docker compose down
@@ -355,15 +420,20 @@ docker compose ps
 
 # Query latest cell KPIs directly from InfluxDB
 curl "http://localhost:8086/api/v2/query?org=telecom" \
-  -H "Authorization: Token your-influxdb-token" \
+  -H "Authorization: Token telecom-super-secret-auth-token-2026" \
   -H "Content-Type: application/vnd.flux" \
   -d 'from(bucket:"telecom_metrics") |> range(start:-5m) |> filter(fn:(r)=>r._measurement=="cell_kpi") |> last()'
 
 # Get raw network state from Controller
-curl http://localhost:8080/network | python -m json.tool
+curl http://localhost:8080/network | py -m json.tool
 
 # Trigger a manual cell move
 curl -X POST http://localhost:8080/move/cell \
   -H "Content-Type: application/json" \
-  -d '{"cell_id":"BLR_KRM_01","to_du_id":"DU-CENTRAL-2"}'
+  -d '{"cell_id":"MLS_RWS_01","to_du_id":"DU-MLS-2"}'
+
+# Check recent SON actions
+curl -X POST http://localhost:8082/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"/son","session_id":"ops"}'
 ```
