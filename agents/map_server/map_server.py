@@ -568,7 +568,13 @@ const CHAT_SHORTCUTS = {
   '/ue':     'Give me a summary of UE usage patterns: which slices are most active, what are the average latencies, and how many handovers have occurred?',
 };
 
-let chatSession = 'map-' + Math.random().toString(36).slice(2, 9);
+// Persist the session across page refreshes so the conversation is not lost.
+// History is cleared only when the user explicitly clicks Clear / runs /clear.
+let chatSession = localStorage.getItem('chatSession');
+if (!chatSession) {
+  chatSession = 'map-' + Math.random().toString(36).slice(2, 9);
+  localStorage.setItem('chatSession', chatSession);
+}
 let chatBusy = false;
 
 function escHtml(s) {
@@ -851,10 +857,29 @@ document.getElementById('chat-input').addEventListener('input', function() {
   this.style.height = Math.min(this.scrollHeight, 96) + 'px';
 });
 
+// Restore prior conversation after a page refresh (same persisted session).
+async function restoreHistory() {
+  try {
+    const r = await fetch(`/api/history?session_id=${chatSession}`);
+    const hist = await r.json();
+    if (Array.isArray(hist) && hist.length > 0) {
+      hist.forEach(m => {
+        const role = m.role === 'user' ? 'user' : 'agent';
+        const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        addMsg(role, c);
+      });
+      return true;
+    }
+  } catch(e) { /* fall through to greeting */ }
+  return false;
+}
+
 // Init
 checkOrchHealth();
 setInterval(checkOrchHealth, 30000);
-addMsg('system', 'Connected — ask about cells, alerts, DUs, or network plans.');
+restoreHistory().then(restored => {
+  if (!restored) addMsg('system', 'Connected — ask about cells, alerts, DUs, or network plans.');
+});
 </script>
 </body>
 </html>"""
