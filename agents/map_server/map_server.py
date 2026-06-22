@@ -814,9 +814,21 @@ document.addEventListener('mouseup', () => {
 
 // Toggle collapse
 let chatCollapsed = false;
+let savedPanelWidth = '';   // remembers the resized width while collapsed
 document.getElementById('toggle-chat-btn').addEventListener('click', () => {
   chatCollapsed = !chatCollapsed;
-  document.getElementById('chat-panel').classList.toggle('collapsed', chatCollapsed);
+  if (chatCollapsed) {
+    // Stash any inline width set by the resize handle and clear it so the
+    // .collapsed CSS (width:36px) is not overridden by inline styles.
+    savedPanelWidth = chatPanel.style.width;
+    chatPanel.style.width    = '';
+    chatPanel.style.minWidth = '';
+  } else if (savedPanelWidth) {
+    // Restore the previously resized width on expand.
+    chatPanel.style.width    = savedPanelWidth;
+    chatPanel.style.minWidth = savedPanelWidth;
+  }
+  chatPanel.classList.toggle('collapsed', chatCollapsed);
   const tb = document.getElementById('toggle-chat-btn');
   tb.innerHTML = chatCollapsed ? '&#9654;' : '&#9664;';
   tb.title = chatCollapsed ? 'Expand chat panel' : 'Collapse chat panel';
