@@ -12,16 +12,19 @@ GET  /plan/{id}         → retrieve a stored plan
 GET  /candidates        → list candidate cell inventory
 """
 
+import json
 import math
 import os
 import uuid
 import httpx
 import logging
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 
 from placement import (
     select_cells, assign_dus, assign_cus, du_centroid,
@@ -36,6 +39,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 CONTROLLER_URL = os.environ.get("CONTROLLER_URL", "http://controller:8080")
+INFLUX_URL     = os.environ.get("INFLUX_URL",    "http://influxdb:8086")
+INFLUX_TOKEN   = os.environ.get("INFLUX_TOKEN",  "telecom-super-secret-auth-token-2026")
+INFLUX_ORG     = os.environ.get("INFLUX_ORG",    "telecom")
+INFLUX_BUCKET  = os.environ.get("INFLUX_BUCKET", "telecom_metrics")
 
 # Diurnal load profile — matches core_simulator.py HOURLY_LOAD (index = hour 0–23)
 HOURLY_LOAD = [
@@ -48,7 +55,73 @@ HOURLY_LOAD = [
 app = FastAPI(title="Telecom Planning API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Session cache — write-through to InfluxDB; prevents Flux round-trips for plans
+# generated in the current process lifetime.
 _plans: dict[str, dict] = {}
+
+_influx_client: InfluxDBClient | None = None
+
+
+def _get_influx() -> InfluxDBClient:
+    global _influx_client
+    if _influx_client is None:
+        _influx_client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+    return _influx_client
+
+
+def _write_plan(plan: dict) -> None:
+    """Persist a plan to InfluxDB measurement 'plans'. Logs on failure; never raises."""
+    try:
+        p = (
+            Point("plans")
+            .tag("plan_id",     plan["plan_id"])
+            .tag("plan_type",   plan["plan_type"])
+            .field("plan_json",        json.dumps(plan))
+            .field("geographic_area",  plan.get("geographic_area", ""))
+            .field("planning_method",  plan.get("planning_method", ""))
+        )
+        _get_influx().write_api(write_options=SYNCHRONOUS).write(
+            bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=[p]
+        )
+        log.info("Plan %s persisted to InfluxDB.", plan["plan_id"])
+    except Exception as exc:
+        log.warning("InfluxDB write failed for plan %s: %s", plan.get("plan_id"), exc)
+
+
+def _read_plan(plan_id: str) -> dict | None:
+    """Read a plan from InfluxDB by plan_id tag. Returns None on miss or error."""
+    flux = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -90d)
+  |> filter(fn: (r) => r._measurement == "plans")
+  |> filter(fn: (r) => r.plan_id == "{plan_id}")
+  |> filter(fn: (r) => r._field == "plan_json")
+  |> last()
+"""
+    try:
+        tables = _get_influx().query_api().query(flux, org=INFLUX_ORG)
+        for table in tables:
+            for rec in table.records:
+                return json.loads(rec.get_value())
+    except Exception as exc:
+        log.warning("InfluxDB read failed for plan %s: %s", plan_id, exc)
+    return None
+
+
+def _store_plan(plan: dict) -> None:
+    """Write to session cache and persist to InfluxDB."""
+    _plans[plan["plan_id"]] = plan
+    _write_plan(plan)
+
+
+def _fetch_plan(plan_id: str) -> dict | None:
+    """Return plan from session cache, falling back to InfluxDB."""
+    if plan_id in _plans:
+        return _plans[plan_id]
+    plan = _read_plan(plan_id)
+    if plan:
+        _plans[plan_id] = plan   # warm the cache
+    return plan
 
 
 # ── Request / Response models ────────────────────────────────────────────────
@@ -480,7 +553,54 @@ def _missing_fields_response(req, required: list[str]) -> dict | None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    try:
+        _get_influx().ping()
+        influx_ok = True
+    except Exception:
+        influx_ok = False
+    return {"status": "ok", "influxdb": influx_ok}
+
+
+@app.get("/plans")
+def list_plans():
+    """List all plans stored in InfluxDB (last 90 days), most recent first."""
+    flux = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -90d)
+  |> filter(fn: (r) => r._measurement == "plans")
+  |> filter(fn: (r) => r._field == "geographic_area")
+  |> last()
+  |> keep(columns: ["_time", "plan_id", "plan_type", "_value"])
+"""
+    try:
+        tables = _get_influx().query_api().query(flux, org=INFLUX_ORG)
+        rows = []
+        seen: set[str] = set()
+        for table in tables:
+            for rec in table.records:
+                pid = rec.values.get("plan_id")
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    rows.append({
+                        "plan_id":         pid,
+                        "plan_type":       rec.values.get("plan_type"),
+                        "geographic_area": rec.get_value(),
+                        "timestamp":       rec.get_time().isoformat() if rec.get_time() else None,
+                    })
+        rows.sort(key=lambda r: r["timestamp"] or "", reverse=True)
+        return {"plans": rows, "count": len(rows)}
+    except Exception as exc:
+        log.warning("InfluxDB list_plans query failed: %s", exc)
+        # Fall back to session cache
+        return {
+            "plans": [
+                {"plan_id": p["plan_id"], "plan_type": p["plan_type"],
+                 "geographic_area": p.get("geographic_area"), "timestamp": p.get("timestamp")}
+                for p in _plans.values()
+            ],
+            "count": len(_plans),
+            "source": "session_cache",
+        }
 
 
 @app.post("/plan")
@@ -488,24 +608,25 @@ def create_plan(req: PlanRequest):
     if (missing := _missing_fields_response(req, _PLAN_REQUIRED)):
         return missing
     plan = generate_plan(req)
-    _plans[plan["plan_id"]] = plan
+    _store_plan(plan)
     log.info("Plan %s (%s): %s", plan["plan_id"], plan["plan_type"], plan["summary"])
     return plan
 
 
 @app.get("/plan/{plan_id}")
 def get_plan(plan_id: str):
-    if plan_id not in _plans:
+    plan = _fetch_plan(plan_id)
+    if plan is None:
         raise HTTPException(404, f"Plan {plan_id} not found")
-    return _plans[plan_id]
+    return plan
 
 
 @app.post("/plan/apply")
 def apply_plan(req: ApplyRequest):
-    if req.plan_id not in _plans:
+    plan = _fetch_plan(req.plan_id)
+    if plan is None:
         raise HTTPException(404, f"Plan {req.plan_id} not found")
 
-    plan     = _plans[req.plan_id]
     topology = plan_to_topology(plan)
     try:
         resp = httpx.post(f"{CONTROLLER_URL}/topology/replace", json=topology, timeout=10.0)

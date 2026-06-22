@@ -10,6 +10,7 @@ FastAPI service on port 8081. Accepts deployment parameters, decides whether exi
 | `uvicorn` | 0.32.0 | ASGI server |
 | `pydantic` | 2.10.3 | Request / response model validation |
 | `httpx` | 0.27.2 | Synchronous HTTP calls to Controller |
+| `influxdb-client` | 1.44.0 | Plan persistence (write + Flux query) |
 
 ## Planning flow
 
@@ -106,7 +107,12 @@ Reorganize mode                    Deploy mode
 Step 3 — plan_to_topology()
       converts plan to topology.json format; preserves all hardware fields
 
-Step 4 — store in _plans[plan_id]; return Plan schema (see below)
+Step 4 — _store_plan(plan): write to session cache (_plans dict) AND persist to InfluxDB
+           measurement "plans" | tags: plan_id, plan_type | fields: plan_json (full JSON),
+           geographic_area, planning_method | timestamp: now
+           InfluxDB write failure is logged as WARNING; plan still returned to caller.
+
+Step 5 — return Plan schema (see below)
 ```
 
 ## Plan schema
@@ -435,6 +441,21 @@ Fallback: bounding box of substring-matched CANDIDATE_CELLS → `lat_km × lon_k
 **`_missing_fields_response(req, required) → dict | None`**  
 Returns `{"status": "missing_fields", "missing": [...], "message": "..."}` if any field in `required` is `None` on `req`, else `None`.
 
+**`_get_influx() → InfluxDBClient`**  
+Lazy singleton. Creates `InfluxDBClient(INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG)` on first call.
+
+**`_write_plan(plan) → None`**  
+Writes plan to InfluxDB measurement `plans`. Tags: `plan_id`, `plan_type`. Fields: `plan_json` (full JSON string), `geographic_area`, `planning_method`. Logs WARNING on failure; never raises.
+
+**`_read_plan(plan_id) → dict | None`**  
+Flux query: `range(-90d)`, filter `_measurement=="plans"`, `plan_id==plan_id`, `_field=="plan_json"`, `last()`. Deserializes the JSON string. Returns `None` on miss or error.
+
+**`_store_plan(plan) → None`**  
+Writes to `_plans[plan_id]` cache AND calls `_write_plan(plan)`.
+
+**`_fetch_plan(plan_id) → dict | None`**  
+Returns `_plans[plan_id]` if in cache; else calls `_read_plan`, warms cache on hit, returns `None` on miss.
+
 **`_sufficiency_check(req, area_meta=None) → (dict, list[dict])`**  
 Fetches live cells from `GET /network` on Controller.
 ```
@@ -490,16 +511,35 @@ Returns plan with `plan_type="deploy"`, `planning_method="heuristic"`, `is_new=T
 Converts a plan to `topology.json` format for `POST /topology/replace` on Controller.  
 Structure: `{version:1, last_updated, updated_by, cus:{cu_id:{du_ids}}, dus:{du_id:{cu_id, cell_ids}}, cells:{cell_id:{area, pci, lat, lon, band, freq_mhz, max_ues, generation, vendor, hardware_model, antenna_config, tx_power_w, idle_power_w, peak_dl_mbps}}}`.
 
+## Plan persistence
+
+Plans are written to InfluxDB measurement `plans` on creation and read back on `GET /plan/{id}` cache miss.
+
+| InfluxDB field | Type | Content |
+|---|---|---|
+| `plan_json` | string field | Full plan JSON (serialized) |
+| `geographic_area` | string field | Area name (indexed for list queries) |
+| `planning_method` | string field | `power_rebalance` or `heuristic` |
+| `plan_id` | tag | 8-char UUID — used for Flux filter |
+| `plan_type` | tag | `reorganize` or `deploy` |
+
+**Retrieval strategy** (`_fetch_plan`): check in-memory `_plans` session cache first; on miss, run Flux query (`range -90d`, filter by `plan_id` tag, `plan_json` field, `last()`), deserialize, warm cache.  
+**Failure behaviour**: InfluxDB write/read failures are logged at WARNING level and do not fail the HTTP request. Plans created in the current session are always retrievable via the session cache even if InfluxDB is down.
+
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `CONTROLLER_URL` | `http://controller:8080` | sufficiency analysis (`/network`) + `plan/apply` |
+| `INFLUX_URL` | `http://influxdb:8086` | Plan persistence |
+| `INFLUX_TOKEN` | `telecom-super-secret-auth-token-2026` | InfluxDB auth |
+| `INFLUX_ORG` | `telecom` | InfluxDB organisation |
+| `INFLUX_BUCKET` | `telecom_metrics` | Bucket for plans measurement |
 
 ## Routes
 
 ```
-GET  /health
+GET  /health                   {"status": "ok", "influxdb": true|false}
 GET  /areas                    list all Malleswaram sub-locality areas (MALLESWARAM_AREAS)
 GET  /areas/{area_id}/cells    accepts area_id (e.g. "MLS-RWS") OR area name substring
                                (e.g. "Railway Station"); returns deployed cells covering
@@ -516,8 +556,14 @@ POST /plan
        HTTP 200  Plan schema
          plan_type = "reorganize" if existing cells are sufficient
          plan_type = "deploy"     if new cells are required
+     Side-effect: plan written to InfluxDB measurement "plans"
 
-GET  /plan/{plan_id}           retrieve stored plan by ID
+GET  /plans                    list persisted plans (last 90 days) sorted newest-first;
+                               falls back to session cache on InfluxDB error
+                               Returns: {"plans": [{plan_id, plan_type, geographic_area,
+                               timestamp}], "count": N}
+
+GET  /plan/{plan_id}           session cache first, then InfluxDB Flux query
 
 POST /plan/apply
      Body: {plan_id}
