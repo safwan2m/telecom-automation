@@ -384,9 +384,11 @@ def _run_pipeline(
         pcis = keep_pcis
     else:
         pcis = assign_pcis(cells)
-    violations = validate_plan(cells, pcis)
-    if violations:
-        log.warning("PCI plan has %d violation(s): %s", len(violations), violations[:3])
+    pci_check = validate_plan(cells, pcis)
+    if pci_check["collisions"]:
+        log.warning("PCI plan has %d collision(s): %s", len(pci_check["collisions"]), pci_check["collisions"][:3])
+    if pci_check["confusions"]:
+        log.info("PCI plan has %d confusion(s) (best-effort, expected in dense networks)", len(pci_check["confusions"]))
 
     cell_map  = {c["cell_id"]: c for c in cells}
     du_cells  = assign_dus(cells, max_cells_per_du)
@@ -445,12 +447,13 @@ def _run_pipeline(
     ]
 
     return {
-        "cell_plans":  cell_plans,
-        "du_plans":    du_plans,
-        "cu_plans":    cu_plans,
-        "timing_sync": timing_sync,
-        "violations":  violations,
-        "du_cells":    du_cells,
+        "cell_plans":    cell_plans,
+        "du_plans":      du_plans,
+        "cu_plans":      cu_plans,
+        "timing_sync":   timing_sync,
+        "violations":    pci_check["collisions"],
+        "pci_confusions": pci_check["confusions"],
+        "du_cells":      du_cells,
     }
 
 
@@ -512,6 +515,7 @@ def _reorganize_plan(
         "geographic_area":  req.geographic_area,
         "timing_sync":      pipeline["timing_sync"],
         "pci_violations":   pipeline["violations"],
+        "pci_confusions":   pipeline["pci_confusions"],
         "cells":            pipeline["cell_plans"],
         "dus":              pipeline["du_plans"],
         "cus":              pipeline["cu_plans"],
@@ -576,6 +580,7 @@ def _deploy_plan(
         "geographic_area":  req.geographic_area,
         "timing_sync":      pipeline["timing_sync"],
         "pci_violations":   pipeline["violations"],
+        "pci_confusions":   pipeline["pci_confusions"],
         "cells":            pipeline["cell_plans"],
         "dus":              pipeline["du_plans"],
         "cus":              pipeline["cu_plans"],
