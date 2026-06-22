@@ -7,13 +7,12 @@ infrastructure is required (deploy), then generates a complete conflict-free
 plan. All plan types return an identical unified schema.
 
 POST /plan              → generate plan (reorganize or deploy)
-POST /plan/multi-period → multi-period MIP deployment plan
 POST /plan/apply        → push plan to Controller (live topology update)
 GET  /plan/{id}         → retrieve a stored plan
 GET  /candidates        → list candidate cell inventory
-GET  /demand-clusters   → list Malleswaram demand clusters
 """
 
+import math
 import os
 import uuid
 import httpx
@@ -25,9 +24,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from placement import (
-    select_cells, select_cells_mip, assign_dus, assign_cus, du_centroid,
+    select_cells, assign_dus, assign_cus, du_centroid,
     estimate_cost, fronthaul_latency_us, midhaul_latency_ms,
     haversine_km, CANDIDATE_CELLS,
+    MALLESWARAM_AREAS, cells_covering_area,
 )
 from pci_planner import assign_pcis, validate_plan
 from slice_allocator import allocate, timing_sync_strategy
@@ -80,32 +80,6 @@ class PlanRequest(BaseModel):
     compute_resources:     ComputeResources   = Field(default_factory=ComputeResources)
     max_cells_per_du:      int                = 3
     max_dus_per_cu:        int                = 4
-    use_mip:               bool               = False
-    sinr_min_db:           float              = 10.0
-    mip_time_limit_sec:    int                = 120
-
-
-class TimePeriodDemand(BaseModel):
-    period:      int
-    cluster_ids: list[str] = Field(description="Active demand cluster IDs")
-    description: str = ""
-
-
-class MultiPeriodPlanRequest(BaseModel):
-    # Required — None means the caller did not supply the field
-    geographic_area:     Optional[str]                          = None
-    demand_mode:         Optional[Literal["permanent", "temporary"]] = None
-    expected_user_density: Optional[float]                      = None
-    traffic_profile:     Optional[TrafficProfile]               = None
-    spectrum_bands:      Optional[list[str]]                    = None
-    latency_constraints: Optional[LatencyConstraints]           = None
-    deployment_budget:   Optional[float]                        = None
-    # Optional with defaults
-    time_periods:        list[TimePeriodDemand] = Field(default_factory=list)
-    max_cells_per_du:    int                    = 3
-    max_dus_per_cu:      int                    = 4
-    sinr_min_db:         float                  = 10.0
-    mip_time_limit_sec:  int                    = 120
 
 
 class ApplyRequest(BaseModel):
@@ -114,8 +88,24 @@ class ApplyRequest(BaseModel):
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
 
-def _area_km2(geographic_area: str) -> float:
-    """Bounding-box area in km² derived from matching CANDIDATE_CELLS lat/lon."""
+def _resolve_area(geographic_area: str) -> dict | None:
+    """Resolve a free-text area name or area_id to a MALLESWARAM_AREAS entry.
+    Tries exact area_id match first, then case-insensitive substring on name/area_id."""
+    q = geographic_area.lower()
+    return next(
+        (a for a in MALLESWARAM_AREAS
+         if q == a["area_id"].lower()
+         or q in a["name"].lower()
+         or a["name"].lower() in q
+         or q in a["area_id"].lower()),
+        None,
+    )
+
+
+def _area_km2(geographic_area: str, area_meta: dict | None = None) -> float:
+    """Area in km².  Uses π·r² from MALLESWARAM_AREAS when known; bounding-box fallback."""
+    if area_meta:
+        return round(math.pi * area_meta["radius_km"] ** 2, 4)
     matches = [
         c for c in CANDIDATE_CELLS
         if geographic_area.lower() in c["area"].lower()
@@ -125,54 +115,65 @@ def _area_km2(geographic_area: str) -> float:
     lons = [c["lon"] for c in matches]
     lat_km = haversine_km(min(lats), min(lons), max(lats), min(lons))
     lon_km = haversine_km(min(lats), min(lons), min(lats), max(lons))
-    return round(max(lat_km * lon_km, 0.01), 4)  # floor at 0.01 to avoid zero-area
+    return round(max(lat_km * lon_km, 0.01), 4)
 
 
 def _area_matches(cell_area: str, target: str) -> bool:
     return target.lower() in cell_area.lower() or cell_area.lower() in target.lower()
 
 
-def _sufficiency_check(req: PlanRequest) -> tuple[dict, list[dict]]:
+def _sufficiency_check(
+    req: PlanRequest,
+    area_meta: dict | None = None,
+) -> tuple[dict, list[dict]]:
     """
     Query the live network, compute required UEs at peak hour, decide mode.
 
+    When area_meta is provided (area found in MALLESWARAM_AREAS):
+      - area_km² = π · r²  (accurate sub-locality area)
+      - covering cells identified via cells_covering_area() (≥20 % overlap)
+    Fallback (unknown area): bounding-box area, string-match on cell.area field.
+
     Returns (analysis_dict, live_cells_list).
-    live_cells_list is in the format expected by _run_pipeline; contains
-    _existing_pci for use in reorganize mode.
+    live_cells_list contains _existing_pci for use in reorganize mode.
     """
-    area_km2  = _area_km2(req.geographic_area)
-    peak_hour = req.traffic_profile.peak_hour
-    lf        = HOURLY_LOAD[peak_hour]
+    area_km2     = _area_km2(req.geographic_area, area_meta)
+    peak_hour    = req.traffic_profile.peak_hour
+    lf           = HOURLY_LOAD[peak_hour]
     required_ues = round(req.expected_user_density * area_km2 * lf)
 
-    deployed_ues  = 0
-    live_cells: list[dict] = []
+    all_live: list[dict] = []
     try:
         resp = httpx.get(f"{CONTROLLER_URL}/network", timeout=5.0)
         resp.raise_for_status()
         for cell_id, cd in resp.json().get("cells", {}).items():
-            if _area_matches(cd.get("area", ""), req.geographic_area):
-                deployed_ues += cd.get("max_ues", 0)
-                live_cells.append({
-                    "cell_id":        cell_id,
-                    "area":           cd.get("area", req.geographic_area),
-                    "lat":            cd["lat"],
-                    "lon":            cd["lon"],
-                    "band":           cd.get("band", "n78"),
-                    "freq_mhz":       cd.get("freq_mhz", 3500),
-                    "max_ues":        cd.get("max_ues", 900),
-                    "generation":     cd.get("generation", "5G"),
-                    "vendor":         cd.get("vendor", "Nokia"),
-                    "hardware_model": cd.get("hardware_model", "AirScale MAA 64T64R"),
-                    "antenna_config": cd.get("antenna_config", "64T64R"),
-                    "tx_power_w":     cd.get("tx_power_w", 1000),
-                    "idle_power_w":   cd.get("idle_power_w", 250),
-                    "peak_dl_mbps":   cd.get("peak_dl_mbps", 3800),
-                    "_existing_pci":  cd.get("pci", 0),
-                })
+            all_live.append({
+                "cell_id":        cell_id,
+                "area":           cd.get("area", req.geographic_area),
+                "lat":            cd["lat"],
+                "lon":            cd["lon"],
+                "band":           cd.get("band", "n78"),
+                "freq_mhz":       cd.get("freq_mhz", 3500),
+                "max_ues":        cd.get("max_ues", 900),
+                "density_weight": cd.get("max_ues", 900) / 900.0,
+                "generation":     cd.get("generation", "5G"),
+                "vendor":         cd.get("vendor", "Nokia"),
+                "hardware_model": cd.get("hardware_model", "AirScale MAA 64T64R"),
+                "antenna_config": cd.get("antenna_config", "64T64R"),
+                "tx_power_w":     cd.get("tx_power_w", 1000),
+                "idle_power_w":   cd.get("idle_power_w", 250),
+                "peak_dl_mbps":   cd.get("peak_dl_mbps", 3800),
+                "_existing_pci":  cd.get("pci", 0),
+            })
     except Exception as exc:
         log.warning("Controller unreachable for sufficiency check: %s", exc)
 
+    if area_meta:
+        live_cells = cells_covering_area(area_meta, all_live)
+    else:
+        live_cells = [c for c in all_live if _area_matches(c["area"], req.geographic_area)]
+
+    deployed_ues = sum(c.get("max_ues", 0) for c in live_cells)
     mode = "reorganize" if deployed_ues >= required_ues else "deploy"
     analysis = {
         "area_km2":         area_km2,
@@ -193,7 +194,6 @@ def _run_pipeline(
     max_cells_per_du: int,
     max_dus_per_cu: int,
     is_new: bool = True,
-    build_schedule: dict | None = None,
     keep_pcis: dict | None = None,
 ) -> dict:
     """
@@ -201,7 +201,6 @@ def _run_pipeline(
 
     keep_pcis: if provided, uses these PCIs instead of re-running assignment
                (reorganize mode — preserve existing cell PCIs to minimise disruption).
-    build_schedule: {cell_id: period} for multi-period plans.
     Returns dict with cell_plans, du_plans, cu_plans, timing_sync, violations, du_cells.
     """
     if keep_pcis is not None:
@@ -244,7 +243,6 @@ def _run_pipeline(
             "slices":               sl["slices"],
             "slice_warnings":       sl["warnings"],
             "is_new":               is_new,
-            "built_in_period":      (build_schedule or {}).get(cid),
         })
 
     du_plans = [
@@ -282,6 +280,7 @@ def _run_pipeline(
 # ── Planning logic ───────────────────────────────────────────────────────────
 
 def generate_plan(req: PlanRequest) -> dict:
+    area_meta = _resolve_area(req.geographic_area)
     traffic = {
         "eMBB":  req.traffic_profile.eMBB,
         "URLLC": req.traffic_profile.URLLC,
@@ -292,11 +291,11 @@ def generate_plan(req: PlanRequest) -> dict:
         "fronthaul_us": req.latency_constraints.fronthaul_us,
     }
 
-    sa, live_cells = _sufficiency_check(req)
+    sa, live_cells = _sufficiency_check(req, area_meta)
 
     if sa["mode_chosen"] == "reorganize" and live_cells:
         return _reorganize_plan(req, sa, live_cells, traffic, lat_constraints)
-    return _deploy_plan(req, sa, traffic, lat_constraints)
+    return _deploy_plan(req, sa, traffic, lat_constraints, area_meta)
 
 
 def _reorganize_plan(
@@ -325,15 +324,11 @@ def _reorganize_plan(
         "planning_method":  "power_rebalance",
         "timestamp":        datetime.now(timezone.utc).isoformat(),
         "geographic_area":  req.geographic_area,
-        "demand_mode":      "single",
-        "n_periods":        1,
         "timing_sync":      pipeline["timing_sync"],
         "pci_violations":   pipeline["violations"],
         "cells":            pipeline["cell_plans"],
         "dus":              pipeline["du_plans"],
         "cus":              pipeline["cu_plans"],
-        "build_schedule":   {},
-        "period_assignments": {},
         "summary": {
             "n_cells":               len(live_cells),
             "n_new_cells":           0,
@@ -353,26 +348,25 @@ def _deploy_plan(
     sa: dict,
     traffic: dict,
     lat_constraints: dict,
+    area_meta: dict | None = None,
 ) -> dict:
-    """Select new cells via heuristic or MIP and run the full pipeline."""
-    mip_result = None
-    if req.use_mip:
-        try:
-            mip_result = select_cells_mip(
-                demand_clusters=None,
-                budget=req.deployment_budget,
-                spectrum_bands=req.spectrum_bands,
-                sinr_min_db=req.sinr_min_db,
-                time_limit_sec=req.mip_time_limit_sec,
-            )
-            cells = mip_result["selected_cells"]
-            log.info("MIP placement: %d sites, status=%s", len(cells), mip_result["status"])
-        except Exception as exc:
-            log.warning("MIP placement failed (%s); falling back to heuristic", exc)
-            mip_result = None
+    """Select new cells via heuristic and run the full pipeline."""
+    # Proximity pre-filter: restrict candidates to those near the target area.
+    if area_meta:
+        max_dist = area_meta["radius_km"] + 0.5
+        candidate_pool = [
+            c for c in CANDIDATE_CELLS
+            if haversine_km(c["lat"], c["lon"], area_meta["lat"], area_meta["lon"]) <= max_dist
+        ] or CANDIDATE_CELLS
+        area_center = (area_meta["lat"], area_meta["lon"])
+    else:
+        candidate_pool = CANDIDATE_CELLS
+        area_center    = None
 
-    if mip_result is None:
-        cells = select_cells(req.expected_user_density, req.deployment_budget, req.spectrum_bands)
+    cells = select_cells(
+        req.expected_user_density, req.deployment_budget, req.spectrum_bands,
+        candidate_pool=candidate_pool, area_center=area_center,
+    )
 
     pipeline = _run_pipeline(
         cells=cells,
@@ -384,28 +378,22 @@ def _deploy_plan(
         is_new=True,
     )
 
-    planning_method  = ("mip" if mip_result and mip_result.get("source") == "mip"
-                        else "heuristic")
     estimated_cost   = estimate_cost(
         len(cells), len(pipeline["du_plans"]), len(pipeline["cu_plans"])
     )
 
     plan_id = str(uuid.uuid4())[:8]
-    plan = {
+    return {
         "plan_id":          plan_id,
         "plan_type":        "deploy",
-        "planning_method":  planning_method,
+        "planning_method":  "heuristic",
         "timestamp":        datetime.now(timezone.utc).isoformat(),
         "geographic_area":  req.geographic_area,
-        "demand_mode":      "single",
-        "n_periods":        1,
         "timing_sync":      pipeline["timing_sync"],
         "pci_violations":   pipeline["violations"],
         "cells":            pipeline["cell_plans"],
         "dus":              pipeline["du_plans"],
         "cus":              pipeline["cu_plans"],
-        "build_schedule":   {},
-        "period_assignments": {},
         "summary": {
             "n_cells":               len(cells),
             "n_new_cells":           len(cells),
@@ -414,20 +402,10 @@ def _deploy_plan(
             "total_capacity_ues":    sum(c["max_ues"] for c in cells),
             "estimated_cost_usd":    estimated_cost,
             "budget_utilisation_pct": round(estimated_cost / req.deployment_budget * 100, 1),
-            "placement_method":      planning_method,
+            "placement_method":      "heuristic",
             "sufficiency_analysis":  sa,
         },
     }
-    if mip_result:
-        plan["mip_placement"] = {
-            "status":         mip_result.get("status"),
-            "install_cost":   mip_result.get("install_cost"),
-            "op_cost":        mip_result.get("op_cost"),
-            "total_cost":     mip_result.get("total_cost"),
-            "build_schedule": mip_result.get("build_schedule", {}),
-            "feasibility":    mip_result.get("feasibility", {}),
-        }
-    return plan
 
 
 def plan_to_topology(plan: dict) -> dict:
@@ -485,7 +463,6 @@ _PLAN_REQUIRED = [
     "geographic_area", "expected_user_density", "traffic_profile",
     "spectrum_bands", "deployment_budget", "latency_constraints",
 ]
-_MULTI_PERIOD_REQUIRED = _PLAN_REQUIRED + ["demand_mode"]
 
 
 def _missing_fields_response(req, required: list[str]) -> dict | None:
@@ -545,157 +522,37 @@ def apply_plan(req: ApplyRequest):
         }
 
 
+@app.get("/areas")
+def list_areas():
+    return MALLESWARAM_AREAS
+
+
+@app.get("/areas/{area_id}/cells")
+def area_cells(area_id: str):
+    area = _resolve_area(area_id)
+    if not area:
+        raise HTTPException(404, f"Area {area_id!r} not found — use GET /areas to list valid names")
+
+    live_cells: list[dict] = []
+    try:
+        resp = httpx.get(f"{CONTROLLER_URL}/network", timeout=5.0)
+        resp.raise_for_status()
+        for cell_id, cd in resp.json().get("cells", {}).items():
+            live_cells.append({"cell_id": cell_id, **cd})
+    except Exception as exc:
+        log.warning("Controller unreachable for area coverage query: %s", exc)
+
+    covering = cells_covering_area(area, live_cells)
+    return {
+        "area":           area,
+        "n_covering":     len(covering),
+        "covering_cells": covering,
+    }
+
+
 @app.get("/candidates")
 def list_candidates():
     return CANDIDATE_CELLS
-
-
-@app.get("/demand-clusters")
-def list_demand_clusters():
-    from mip_placer import (
-        BANGALORE_DEMAND_CLUSTERS, DEMAND_PERIODS_CASE_A, DEMAND_PERIODS_CASE_B,
-    )
-    return {
-        "clusters": [
-            {"cluster_id": dc.cluster_id, "area": dc.area,
-             "lat": dc.lat, "lon": dc.lon, "n_channels": dc.n_channels}
-            for dc in BANGALORE_DEMAND_CLUSTERS
-        ],
-        "preset_periods": {
-            "permanent_case_a": DEMAND_PERIODS_CASE_A,
-            "temporary_case_b": DEMAND_PERIODS_CASE_B,
-        },
-    }
-
-
-@app.post("/plan/multi-period")
-def create_multi_period_plan(req: MultiPeriodPlanRequest):
-    """
-    Multi-period MIP-based network planning (Almoghathawi et al. 2024).
-
-    Returns HTTP 200 missing_fields response if any required field is absent.
-    permanent (Case A): phased rollout — BSs built in early periods serve later demand.
-    temporary (Case B): shifting demand — event/diurnal peaks across periods.
-
-    Returns unified plan schema with build_schedule and period_assignments populated.
-    """
-    if (missing := _missing_fields_response(req, _MULTI_PERIOD_REQUIRED)):
-        return missing
-
-    from mip_placer import (
-        solve_bs_placement_mip, PropagationParams,
-        BANGALORE_DEMAND_CLUSTERS, DEMAND_PERIODS_CASE_A, DEMAND_PERIODS_CASE_B,
-        candidate_sites_from_cells,
-    )
-
-    dc_by_id = {dc.cluster_id: dc for dc in BANGALORE_DEMAND_CLUSTERS}
-
-    if req.time_periods:
-        demand_by_period = [
-            [dc_by_id[cid] for cid in tp.cluster_ids if cid in dc_by_id]
-            for tp in sorted(req.time_periods, key=lambda x: x.period)
-        ]
-    else:
-        preset = DEMAND_PERIODS_CASE_A if req.demand_mode == "permanent" \
-                 else DEMAND_PERIODS_CASE_B
-        demand_by_period = [
-            [dc_by_id[cid] for cid in cids if cid in dc_by_id]
-            for cids in preset
-        ]
-
-    candidates = [c for c in CANDIDATE_CELLS if c["band"] in req.spectrum_bands] or CANDIDATE_CELLS
-    cs_list    = candidate_sites_from_cells(
-        candidates,
-        install_cost_usd=req.deployment_budget * 0.6 / max(len(candidates), 1),
-        op_cost_usd=1_000.0,
-    )
-
-    mip_result = solve_bs_placement_mip(
-        demand_by_period=demand_by_period,
-        candidate_sites=cs_list,
-        prop=PropagationParams(sinr_min_db=req.sinr_min_db),
-        mode=req.demand_mode,
-        time_limit_sec=req.mip_time_limit_sec,
-    )
-
-    if mip_result["status"] != "Optimal":
-        raise HTTPException(422, detail={
-            "error":      "MIP solver could not find an optimal solution",
-            "status":     mip_result["status"],
-            "msg":        mip_result["solver_msg"],
-            "feasibility": mip_result.get("feasibility", {}),
-        })
-
-    selected_ids = set(mip_result["selected_sites"])
-    final_cells  = [c for c in CANDIDATE_CELLS if c["cell_id"] in selected_ids]
-
-    traffic = {
-        "eMBB":  req.traffic_profile.eMBB,
-        "URLLC": req.traffic_profile.URLLC,
-        "mMTC":  req.traffic_profile.mMTC,
-    }
-    lat_constraints = {
-        "e2e_ms":       req.latency_constraints.e2e_ms,
-        "fronthaul_us": req.latency_constraints.fronthaul_us,
-    }
-
-    pipeline = _run_pipeline(
-        cells=final_cells,
-        traffic=traffic,
-        lat_constraints=lat_constraints,
-        spectrum_bands=req.spectrum_bands,
-        max_cells_per_du=req.max_cells_per_du,
-        max_dus_per_cu=req.max_dus_per_cu,
-        is_new=True,
-        build_schedule=mip_result["build_schedule"],
-    )
-
-    plan_id = str(uuid.uuid4())[:8]
-    plan = {
-        "plan_id":          plan_id,
-        "plan_type":        "deploy",
-        "planning_method":  "mip_multi_period",
-        "timestamp":        datetime.now(timezone.utc).isoformat(),
-        "geographic_area":  req.geographic_area,
-        "demand_mode":      req.demand_mode,
-        "n_periods":        mip_result["n_periods"],
-        "timing_sync":      pipeline["timing_sync"],
-        "pci_violations":   pipeline["violations"],
-        "cells":            pipeline["cell_plans"],
-        "dus":              pipeline["du_plans"],
-        "cus":              pipeline["cu_plans"],
-        "build_schedule":   mip_result["build_schedule"],
-        "period_assignments": mip_result["assignments"],
-        "mip_result": {
-            "status":         mip_result["status"],
-            "total_cost":     mip_result["total_cost"],
-            "install_cost":   mip_result["install_cost"],
-            "op_cost":        mip_result["op_cost"],
-            "build_schedule": mip_result["build_schedule"],
-            "assignments":    mip_result["assignments"],
-            "feasibility":    mip_result["feasibility"],
-        },
-        "summary": {
-            "n_cells":               len(final_cells),
-            "n_new_cells":           len(final_cells),
-            "n_dus":                 len(pipeline["du_plans"]),
-            "n_cus":                 len(pipeline["cu_plans"]),
-            "total_capacity_ues":    sum(c["max_ues"] for c in final_cells),
-            "estimated_cost_usd":    mip_result["total_cost"] or 0.0,
-            "budget_utilisation_pct": round(
-                (mip_result["total_cost"] or 0) / req.deployment_budget * 100, 1),
-            "placement_method":      "mip_multi_period",
-            "sufficiency_analysis": {
-                "required_ues":     0,
-                "current_capacity": 0,
-                "mode_chosen":      "deploy",
-            },
-        },
-    }
-    _plans[plan_id] = plan
-    log.info("Multi-period plan %s: %d sites, mode=%s, cost=%.0f",
-             plan_id, len(final_cells), req.demand_mode, mip_result["total_cost"] or 0)
-    return plan
 
 
 if __name__ == "__main__":

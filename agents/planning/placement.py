@@ -1,15 +1,8 @@
 """
 Cell placement, DU grouping, and CU grouping algorithms.
 
-Two placement modes:
-  Heuristic (default) — density-weighted greedy selection, fast.
-  MIP                 — optimal cost-minimising selection via the formulation of
-                        Almoghathawi et al. (2024), JER 13:561-567.
-                        Requires pulp (pip install pulp).
-
-Propagation models available:
-  COST-231-Hata       — used by the DU simulator for coverage radius estimation.
-  COST-231-Walfisch-Ikegami (WI) — NLOS urban model used by the MIP placer.
+Placement: density-weighted greedy heuristic with proximity bonus for named areas.
+Propagation: COST-231-Hata urban macro model for coverage radius estimation.
 """
 
 import math
@@ -38,16 +31,16 @@ def _cand(i, cell_id, area, lat, lon, dw):
     }
 
 CANDIDATE_CELLS: list[dict] = [
-    _cand(0, "MLS_RWS_01", "Malleswaram", 13.0080, 77.5760, 1.5),
-    _cand(1, "MLS_18C_01", "Malleswaram", 13.0030, 77.5670, 1.4),
-    _cand(2, "MLS_SPG_01", "Malleswaram", 12.9990, 77.5700, 1.3),
-    _cand(3, "MLS_BEL_01", "Malleswaram", 13.0110, 77.5630, 1.1),
-    _cand(4, "MLS_SNK_01", "Malleswaram", 13.0060, 77.5740, 1.2),
-    _cand(5, "MLS_3MN_01", "Malleswaram", 13.0010, 77.5600, 1.2),
-    _cand(6, "MLS_MGR_01", "Malleswaram", 12.9960, 77.5640, 1.0),
-    _cand(7, "MLS_CHD_01", "Malleswaram", 12.9930, 77.5560, 0.9),
-    _cand(8, "MLS_10C_01", "Malleswaram", 13.0040, 77.5710, 1.3),
-    _cand(9, "MLS_6CR_01", "Malleswaram", 12.9970, 77.5580, 1.0),
+    _cand(0, "MLS_RWS_01", "Malleswaram Railway Station", 13.0080, 77.5760, 1.5),
+    _cand(1, "MLS_18C_01", "Malleswaram 18th Cross",      13.0030, 77.5670, 1.4),
+    _cand(2, "MLS_SPG_01", "Sampige Road South",          12.9990, 77.5700, 1.3),
+    _cand(3, "MLS_BEL_01", "BEL Road",                    13.0110, 77.5630, 1.1),
+    _cand(4, "MLS_SNK_01", "Shankar Mutt Road",           13.0060, 77.5740, 1.2),
+    _cand(5, "MLS_3MN_01", "3rd Main Road",               13.0010, 77.5600, 1.2),
+    _cand(6, "MLS_MGR_01", "Margosa Road",                12.9960, 77.5640, 1.0),
+    _cand(7, "MLS_CHD_01", "Chowdaiah Road",              12.9930, 77.5560, 0.9),
+    _cand(8, "MLS_10C_01", "10th Cross",                  13.0040, 77.5710, 1.3),
+    _cand(9, "MLS_6CR_01", "6th Cross Road",              12.9970, 77.5580, 1.0),
 ]
 
 COST_PER_CELL_USD   = 50_000
@@ -55,6 +48,25 @@ COST_PER_DU_USD     = 30_000
 COST_PER_CU_USD     = 80_000
 FRONTHAUL_RADIUS_KM = 5.0
 MIDHAUL_RADIUS_KM   = 25.0
+
+# Named geographic zones in Malleswaram — independent of any deployment.
+# An area may have 0, 1, or several cells covering it.
+MALLESWARAM_AREAS: list[dict] = [
+    {"area_id": "MLS-RWS", "name": "Malleswaram Railway Station", "lat": 13.0127, "lon": 77.5707, "radius_km": 0.40},
+    {"area_id": "MLS-KMT", "name": "Kadu Malleshwara Temple",     "lat": 13.0097, "lon": 77.5718, "radius_km": 0.30},
+    {"area_id": "MLS-BEL", "name": "BEL Road",                    "lat": 13.0110, "lon": 77.5632, "radius_km": 0.35},
+    {"area_id": "MLS-18C", "name": "Malleswaram 18th Cross",      "lat": 13.0080, "lon": 77.5663, "radius_km": 0.30},
+    {"area_id": "MLS-SNK", "name": "Shankar Mutt Road",           "lat": 13.0062, "lon": 77.5742, "radius_km": 0.30},
+    {"area_id": "MLS-MGR", "name": "Margosa Road Central",        "lat": 13.0055, "lon": 77.5692, "radius_km": 0.30},
+    {"area_id": "MLS-10C", "name": "10th Cross",                  "lat": 13.0040, "lon": 77.5707, "radius_km": 0.30},
+    {"area_id": "MLS-CIR", "name": "Malleswaram Circle",          "lat": 13.0022, "lon": 77.5718, "radius_km": 0.30},
+    {"area_id": "MLS-SPG", "name": "Sampige Road South",          "lat": 13.0025, "lon": 77.5660, "radius_km": 0.30},
+    {"area_id": "MLS-3MN", "name": "3rd Main Road",               "lat": 13.0012, "lon": 77.5598, "radius_km": 0.30},
+    {"area_id": "MLS-6CR", "name": "6th Cross Road",              "lat": 12.9968, "lon": 77.5638, "radius_km": 0.30},
+    {"area_id": "MLS-CHD", "name": "Chowdaiah Road",              "lat": 12.9932, "lon": 77.5562, "radius_km": 0.35},
+]
+
+MIN_AREA_COVERAGE_FRACTION = 0.20
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -65,21 +77,114 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
-def select_cells(user_density: float, budget: float, spectrum_bands: list[str]) -> list[dict]:
+def coverage_radius_km(
+    tx_power_w:       float,
+    freq_mhz:         float,
+    tx_gain_dbi:      float = 18.0,
+    rx_threshold_dbm: float = -100.0,
+    h_tx_m:           float = 25.0,
+    h_rx_m:           float = 1.5,
+) -> float:
+    """
+    Estimate cell coverage radius (km) using COST-231-Hata urban macro model.
+    Solves for the distance d where path loss equals the available link budget.
+    """
+    tx_power_dbm  = 10 * math.log10(max(tx_power_w, 1e-9) * 1000)
+    max_path_loss = tx_power_dbm + tx_gain_dbi - rx_threshold_dbm
+
+    # a(h_rx) for urban large city, f > 300 MHz
+    a_hrx = 3.2 * (math.log10(11.75 * h_rx_m)) ** 2 - 4.97
+    C_m   = 3.0   # metropolitan correction
+
+    A = 46.3 + 33.9 * math.log10(freq_mhz) - 13.82 * math.log10(h_tx_m) - a_hrx + C_m
+    B = 44.9 - 6.55 * math.log10(h_tx_m)
+
+    if B <= 0:
+        return 0.1
+    log_d = (max_path_loss - A) / B
+    return round(max(10 ** log_d, 0.05), 3)
+
+
+def circle_overlap_fraction(d: float, r_area: float, r_cell: float) -> float:
+    """
+    Fraction of the area circle (radius r_area) covered by the cell circle (radius r_cell).
+    d = distance between their centres (km). Returns value in [0, 1].
+    """
+    if d >= r_cell + r_area:
+        return 0.0
+    if d + r_area <= r_cell:
+        return 1.0                               # area fully inside cell coverage
+    if d + r_cell <= r_area:
+        return (r_cell * r_cell) / (r_area * r_area)   # cell fully inside area
+
+    r1, r2 = r_area, r_cell
+    cos_a1 = (d*d + r1*r1 - r2*r2) / (2 * d * r1)
+    cos_a2 = (d*d + r2*r2 - r1*r1) / (2 * d * r2)
+    a1 = math.acos(max(-1.0, min(1.0, cos_a1)))
+    a2 = math.acos(max(-1.0, min(1.0, cos_a2)))
+
+    s           = max(0.0, (-d+r1+r2) * (d+r1-r2) * (d-r1+r2) * (d+r1+r2))
+    intersection = r1*r1*a1 + r2*r2*a2 - 0.5 * math.sqrt(s)
+    return min(1.0, max(0.0, intersection / (math.pi * r1 * r1)))
+
+
+def cells_covering_area(
+    area:       dict,
+    live_cells: list[dict],
+    min_fraction: float = MIN_AREA_COVERAGE_FRACTION,
+) -> list[dict]:
+    """
+    Return live cells that cover at least min_fraction (default 20 %) of the area circle.
+    Each result entry is the original cell dict enriched with:
+      coverage_radius_km, distance_to_area_km, area_coverage_fraction.
+    """
+    results = []
+    for cell in live_cells:
+        r_cell   = coverage_radius_km(
+            tx_power_w  = cell.get("tx_power_w", 100),
+            freq_mhz    = cell.get("freq_mhz", 1800),
+        )
+        dist     = haversine_km(cell["lat"], cell["lon"], area["lat"], area["lon"])
+        fraction = circle_overlap_fraction(dist, area.get("radius_km", 0.3), r_cell)
+        if fraction >= min_fraction:
+            results.append({
+                **cell,
+                "coverage_radius_km":    round(r_cell, 3),
+                "distance_to_area_km":   round(dist, 3),
+                "area_coverage_fraction": round(fraction, 3),
+            })
+    return results
+
+
+def select_cells(
+    user_density:   float,
+    budget:         float,
+    spectrum_bands: list[str],
+    candidate_pool: list[dict] | None = None,
+    area_center:    tuple[float, float] | None = None,
+) -> list[dict]:
     """
     Select candidate cells to deploy.
-    Prioritises cells whose band is in the licensed spectrum and high-density areas.
-    Budget caps the number of cells (simplified cost model).
+    candidate_pool: pre-filtered subset of CANDIDATE_CELLS (e.g. proximity-filtered);
+                    defaults to all CANDIDATE_CELLS.
+    area_center:    (lat, lon) of the target area; adds a proximity bonus to scoring
+                    so nearer candidates rank higher when multiple sites are viable.
+    Budget caps the number of cells selected.
     """
-    COST_PER_SITE = COST_PER_CELL_USD + COST_PER_DU_USD  # rough per-site cost
-    max_cells     = min(int(budget * 0.6 / COST_PER_SITE), len(CANDIDATE_CELLS))
+    pool          = candidate_pool if candidate_pool is not None else CANDIDATE_CELLS
+    COST_PER_SITE = COST_PER_CELL_USD + COST_PER_DU_USD
+    max_cells     = min(int(budget * 0.6 / COST_PER_SITE), len(pool))
     max_cells     = max(max_cells, 1)
 
     def score(c: dict) -> float:
-        band_bonus = 1.5 if c["band"] in spectrum_bands else 0.6
-        return c["density_weight"] * band_bonus * (c["max_ues"] / 300.0) * (user_density / 500.0)
+        band_bonus    = 1.5 if c["band"] in spectrum_bands else 0.6
+        density_score = c["density_weight"] * band_bonus * (c["max_ues"] / 300.0) * (user_density / 500.0)
+        if area_center:
+            dist = haversine_km(c["lat"], c["lon"], area_center[0], area_center[1])
+            density_score *= (1.0 + 1.0 / (1.0 + dist))   # proximity bonus
+        return density_score
 
-    ranked = sorted(CANDIDATE_CELLS, key=score, reverse=True)
+    ranked = sorted(pool, key=score, reverse=True)
     return ranked[:max_cells]
 
 
@@ -156,75 +261,6 @@ def assign_cus(dus: dict[str, list[str]], cell_map: dict[str, dict], max_dus_per
 
 def estimate_cost(n_cells: int, n_dus: int, n_cus: int) -> float:
     return n_cells * COST_PER_CELL_USD + n_dus * COST_PER_DU_USD + n_cus * COST_PER_CU_USD
-
-
-# ── MIP-backed cell selection ────────────────────────────────────────────────
-
-def select_cells_mip(
-    demand_clusters: list[dict] | None = None,
-    budget: float = 2_000_000.0,
-    spectrum_bands: list[str] | None = None,
-    sinr_min_db: float = 10.0,
-    time_limit_sec: int = 120,
-) -> dict:
-    """
-    Select candidate cells to deploy using the MIP formulation of
-    Almoghathawi et al. (2024).  Returns a result dict from solve_bs_placement_mip.
-
-    demand_clusters: list of DemandCluster objects, or None → use
-                     BANGALORE_DEMAND_CLUSTERS (all 10 areas, single period).
-    budget:          max installation budget (caps install_cost per site so
-                     the solver stays within the envelope).
-    spectrum_bands:  restrict candidate sites to these bands; None = all bands.
-    sinr_min_db:     minimum SINR threshold enforced at each demand cluster.
-
-    The returned dict includes selected_sites (list of cell_ids) and
-    build_schedule so callers can filter CANDIDATE_CELLS accordingly.
-    """
-    from mip_placer import (
-        solve_bs_placement_mip, PropagationParams,
-        BANGALORE_DEMAND_CLUSTERS, candidate_sites_from_cells,
-    )
-
-    candidates = [
-        c for c in CANDIDATE_CELLS
-        if spectrum_bands is None or c["band"] in spectrum_bands
-    ]
-    if not candidates:
-        candidates = CANDIDATE_CELLS
-
-    max_sites = min(int(budget * 0.6 / COST_PER_CELL_USD), len(candidates))
-    max_sites = max(max_sites, 1)
-    install_cost_per_site = budget * 0.6 / max(max_sites, 1)
-
-    cs_list = candidate_sites_from_cells(candidates,
-                                         install_cost_usd=install_cost_per_site,
-                                         op_cost_usd=1_000.0)
-
-    if demand_clusters is None:
-        demand_clusters = BANGALORE_DEMAND_CLUSTERS
-
-    prop = PropagationParams(sinr_min_db=sinr_min_db)
-    result = solve_bs_placement_mip(
-        demand_by_period=[demand_clusters],
-        candidate_sites=cs_list,
-        prop=prop,
-        mode="permanent",
-        time_limit_sec=time_limit_sec,
-    )
-
-    if result["status"] != "Optimal":
-        log.warning("MIP returned %s; falling back to heuristic.", result["status"])
-        fallback = select_cells(500.0, budget, spectrum_bands or ["n78", "n28"])
-        result["selected_cells"] = fallback
-        result["source"] = "heuristic_fallback"
-    else:
-        selected_ids = set(result["selected_sites"])
-        result["selected_cells"] = [c for c in CANDIDATE_CELLS
-                                     if c["cell_id"] in selected_ids]
-        result["source"] = "mip"
-
-    return result
 
 
 def fronthaul_latency_us(cell: dict, du_centroid_pos: tuple[float, float]) -> float:

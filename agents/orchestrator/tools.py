@@ -113,6 +113,21 @@ def move_du(du_id: str, to_cu_id: str) -> dict:
     return _ctrl("/move/du", "POST", {"du_id": du_id, "to_cu_id": to_cu_id})
 
 
+def list_areas() -> list:
+    """Return all named Malleswaram sub-locality areas from the planning API."""
+    return _plan("/areas")
+
+
+def get_area_cells(area_id: str) -> dict:
+    """
+    Return deployed cells that cover ≥ 20 % of the named area.
+    area_id accepts an area_id ('MLS-RWS') or a name substring ('Railway Station').
+    Result includes coverage_radius_km, distance_to_area_km, area_coverage_fraction per cell.
+    """
+    import urllib.parse
+    return _plan(f"/areas/{urllib.parse.quote(area_id, safe='')}/cells")
+
+
 def plan_network(
     geographic_area: str | None = None,
     expected_user_density: float | None = None,
@@ -123,8 +138,6 @@ def plan_network(
     spectrum_bands: list[str] | None = None,
     deployment_budget: float | None = None,
     e2e_latency_ms: float | None = None,
-    use_mip: bool = False,
-    sinr_min_db: float = 10.0,
 ) -> dict:
     """
     Run the planning engine to generate a new network plan.
@@ -138,46 +151,6 @@ def plan_network(
         body["geographic_area"] = geographic_area
     if expected_user_density is not None:
         body["expected_user_density"] = expected_user_density
-    # Build traffic_profile only if at least one sub-field was provided
-    tp: dict = {}
-    if embb_fraction  is not None: tp["eMBB"]      = embb_fraction
-    if urllc_fraction is not None: tp["URLLC"]     = urllc_fraction
-    if mmtc_fraction  is not None: tp["mMTC"]      = mmtc_fraction
-    if peak_hour      is not None: tp["peak_hour"] = peak_hour
-    if tp:
-        body["traffic_profile"] = tp
-    if spectrum_bands   is not None: body["spectrum_bands"]    = spectrum_bands
-    if deployment_budget is not None: body["deployment_budget"] = deployment_budget
-    if e2e_latency_ms   is not None:
-        body["latency_constraints"] = {"e2e_ms": e2e_latency_ms, "fronthaul_us": 100.0}
-    body["use_mip"]      = use_mip
-    body["sinr_min_db"]  = sinr_min_db
-    return _plan("/plan", "POST", body)
-
-
-def plan_network_multi_period(
-    geographic_area: str | None = None,
-    expected_user_density: float | None = None,
-    embb_fraction: float | None = None,
-    urllc_fraction: float | None = None,
-    mmtc_fraction: float | None = None,
-    peak_hour: int | None = None,
-    spectrum_bands: list[str] | None = None,
-    deployment_budget: float | None = None,
-    e2e_latency_ms: float | None = None,
-    demand_mode: str | None = None,
-    sinr_min_db: float = 10.0,
-) -> dict:
-    """
-    Run multi-period MIP network planning.
-    Call with only the values the operator has explicitly provided — do NOT infer
-    or assume missing values. The server will return which fields are still needed.
-    demand_mode='permanent': phased rollout (Case A). demand_mode='temporary': diurnal shift (Case B).
-    Returns unified plan schema with build_schedule and period_assignments populated.
-    """
-    body: dict = {}
-    if geographic_area      is not None: body["geographic_area"]       = geographic_area
-    if expected_user_density is not None: body["expected_user_density"] = expected_user_density
     tp: dict = {}
     if embb_fraction  is not None: tp["eMBB"]      = embb_fraction
     if urllc_fraction is not None: tp["URLLC"]     = urllc_fraction
@@ -189,9 +162,7 @@ def plan_network_multi_period(
     if deployment_budget is not None: body["deployment_budget"] = deployment_budget
     if e2e_latency_ms   is not None:
         body["latency_constraints"] = {"e2e_ms": e2e_latency_ms, "fronthaul_us": 100.0}
-    if demand_mode is not None: body["demand_mode"] = demand_mode
-    body["sinr_min_db"] = sinr_min_db
-    return _plan("/plan/multi-period", "POST", body)
+    return _plan("/plan", "POST", body)
 
 
 def apply_plan(plan_id: str) -> dict:
@@ -418,6 +389,36 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "list_areas",
+        "description": (
+            "List all named Malleswaram sub-locality areas (area_id, name, lat, lon, radius_km). "
+            "Call this to validate that a user-mentioned area name exists and to retrieve its area_id "
+            "before calling get_area_cells or plan_network."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_area_cells",
+        "description": (
+            "Return deployed cells that cover ≥ 20 % of the named area, with coverage_radius_km, "
+            "distance_to_area_km, and area_coverage_fraction per cell. "
+            "Accepts area_id (e.g. 'MLS-RWS') or a name substring (e.g. 'Railway Station'). "
+            "Call this before plan_network to assess whether existing coverage already meets the "
+            "user-density requirement — sum the max_ues of returned cells and compare to "
+            "expected_user_density × area_km²."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area_id": {
+                    "type": "string",
+                    "description": "Area ID (e.g. 'MLS-RWS') or name substring (e.g. 'Railway Station')",
+                },
+            },
+            "required": ["area_id"],
+        },
+    },
+    {
         "name": "plan_network",
         "description": (
             "Run the planning engine to generate a network plan. First performs a sufficiency "
@@ -439,36 +440,6 @@ TOOL_SCHEMAS = [
                 "spectrum_bands":        {"type": "array", "items": {"type": "string"}, "description": "Licensed bands e.g. ['n78','B3']"},
                 "deployment_budget":     {"type": "number",  "description": "CAPEX envelope in USD"},
                 "e2e_latency_ms":        {"type": "number",  "description": "End-to-end latency target (ms)"},
-                "use_mip":               {"type": "boolean", "description": "Use MIP-optimal cell selection (slower, cost-optimal with SINR constraints)"},
-                "sinr_min_db":           {"type": "number",  "description": "Minimum SINR threshold for MIP (dB)"},
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "plan_network_multi_period",
-        "description": (
-            "Run multi-period MIP network planning (Almoghathawi et al. 2024). "
-            "permanent (Case A): phased rollout — BSs built in early periods serve later demand. "
-            "temporary (Case B): shifting demand — event/diurnal peaks across periods. "
-            "Returns unified plan schema with build_schedule and period_assignments populated. "
-            "ALL fields are required — ask the operator for any that are missing."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "geographic_area":       {"type": "string",  "description": "Target deployment area e.g. 'Malleswaram'"},
-                "expected_user_density": {"type": "number",  "description": "Users per km²"},
-                "embb_fraction":         {"type": "number",  "description": "eMBB traffic fraction 0–1"},
-                "urllc_fraction":        {"type": "number",  "description": "URLLC traffic fraction 0–1"},
-                "mmtc_fraction":         {"type": "number",  "description": "mMTC traffic fraction 0–1"},
-                "peak_hour":             {"type": "integer", "description": "Peak traffic hour 0–23"},
-                "spectrum_bands":        {"type": "array", "items": {"type": "string"}, "description": "Licensed bands e.g. ['n78','B3']"},
-                "deployment_budget":     {"type": "number",  "description": "CAPEX envelope in USD"},
-                "e2e_latency_ms":        {"type": "number",  "description": "End-to-end latency target (ms)"},
-                "demand_mode":           {"type": "string", "enum": ["permanent", "temporary"],
-                                          "description": "permanent=phased rollout (Case A), temporary=diurnal/event shift (Case B)"},
-                "sinr_min_db":           {"type": "number",  "description": "Minimum SINR threshold (dB)"},
             },
             "required": [],
         },
@@ -579,8 +550,9 @@ TOOL_MAP = {
     "query_cell":                lambda args: query_cell(**args),
     "move_cell":                 lambda args: move_cell(**args),
     "move_du":                   lambda args: move_du(**args),
+    "list_areas":                lambda args: list_areas(),
+    "get_area_cells":            lambda args: get_area_cells(**args),
     "plan_network":              lambda args: plan_network(**args),
-    "plan_network_multi_period": lambda args: plan_network_multi_period(**args),
     "apply_plan":                lambda args: apply_plan(**args),
     "get_alerts":                lambda args: get_alerts(**args),
     "query_ue":                  lambda args: query_ue(**args),

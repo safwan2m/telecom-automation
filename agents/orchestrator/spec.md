@@ -81,8 +81,9 @@ Multiple tools can be called per response (Gemini may batch them); all are execu
 | `query_cell` | `GET /cells/{id}` | Single cell config + 30-min KPI time series |
 | `move_cell` | `POST /move/cell` | Reassign a cell to a different DU |
 | `move_du` | `POST /move/du` | Reassign a DU to a different CU |
-| `plan_network` | `POST /plan` | Heuristic or MIP-optimal placement + PCI + slice planning |
-| `plan_network_multi_period` | `POST /plan/multi-period` | Multi-period MIP (Case A phased rollout / Case B diurnal shift) |
+| `list_areas` | `GET /areas` on Planning API | List all named Malleswaram sub-locality areas with center lat/lon and radius; call this to validate that a user-mentioned area name exists before proceeding |
+| `get_area_cells` | `GET /areas/{area_id}/cells` on Planning API | Deployed cells covering ≥ 20 % of the named area; accepts area_id or name substring (e.g. "Railway Station"); use this to assess existing coverage before calling `plan_network` |
+| `plan_network` | `POST /plan` | Heuristic placement + PCI + slice planning |
 | `apply_plan` | `POST /plan/apply` | Push accepted plan to Controller as live topology |
 | `get_alerts` | InfluxDB Flux query (direct) | Recent KPI anomaly alerts tagged by severity and type |
 | `query_ue` | InfluxDB Flux query (direct) | UE-level usage and mobility data (filter by ue_id or cell_id) |
@@ -93,11 +94,11 @@ Multiple tools can be called per response (Gemini may batch them); all are execu
 
 ## Tool schema design — planning tools
 
-`plan_network` and `plan_network_multi_period` use `"required": []` (empty) in their tool schemas. All parameters default to `None` in the Python function. The tool description explicitly instructs the LLM: *"call with only the values the operator has explicitly provided — do NOT infer or assume missing values."*
+`plan_network` uses `"required": []` (empty) in its tool schema. All parameters default to `None` in the Python function. The tool description explicitly instructs the LLM: *"call with only the values the operator has explicitly provided — do NOT infer or assume missing values."*
 
 **Why this matters:** if the tool schema lists fields as `"required"`, the LLM treats them as values it must supply before making the call. It infers plausible values from context (area from the system prompt, density 500, budget 2 M, etc.) and calls the tool with a fully-populated body. The planning server receives all fields as non-null, finds nothing missing, and generates a plan without the operator ever being asked. Empty `"required"` breaks that inference loop — the LLM calls with whatever the operator has actually stated, the server's missing-fields check triggers for the rest, and the LLM relays the list back to the operator in the next turn.
 
-All other tools keep their existing `"required"` arrays — this design only applies to the planning tools because they are the ones that need interactive operator input before proceeding.
+All other tools keep their existing `"required"` arrays — this design only applies to `plan_network` because it needs interactive operator input before proceeding.
 
 ## Session management
 
