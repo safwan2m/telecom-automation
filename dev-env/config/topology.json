@@ -1,7 +1,7 @@
 {
-  "version": 479,
-  "last_updated": "2026-06-20T11:24:38.923191+00:00",
-  "updated_by": "add_cell:MLS_MGR_NEW_01",
+  "version": 1783,
+  "last_updated": "2026-06-22T14:21:00.790654+00:00",
+  "updated_by": "move_cell:MLS_MGR_01",
   "meta": {
     "city": "Bangalore",
     "zone": "Malleswaram",
@@ -41,13 +41,9 @@
         "MLS_BEL_02",
         "MLS_BEL_03",
         "MLS_SNK_03",
-        "MLS_18C_02",
-        "MLS_RWS_01",
-        "MLS_SNK_02",
-        "MLS_RWS_02",
-        "MLS_18C_01",
-        "MLS_BEL_01",
-        "MLS_SNK_01"
+        "MLS_6CR_01",
+        "MLS_10C_01",
+        "MLS_MGR_01"
       ]
     },
     "DU-MLS-2": {
@@ -59,10 +55,11 @@
         "MLS_3MN_03",
         "MLS_10C_03",
         "MLS_10C_02",
+        "MLS_18C_02",
         "MLS_SPG_02",
-        "MLS_SPG_01",
         "MLS_3MN_01",
-        "MLS_10C_01"
+        "MLS_BEL_01",
+        "MLS_18C_01"
       ]
     },
     "DU-MLS-3": {
@@ -75,17 +72,19 @@
         "MLS_CHD_03",
         "MLS_6CR_02",
         "MLS_6CR_03",
-        "MLS_6CR_01",
+        "MLS_RWS_02",
+        "MLS_SNK_02",
         "MLS_CHD_01",
-        "MLS_MGR_01",
-        "MLS_MGR_NEW_01"
+        "MLS_RWS_01",
+        "MLS_SNK_01",
+        "MLS_SPG_01"
       ]
     }
   },
   "cells": {
     "MLS_RWS_01": {
       "area": "Malleswaram",
-      "lat": 13.008,
+      "lat": 13.007,
       "lon": 77.576,
       "generation": "5G",
       "band": "n78",
@@ -101,7 +100,7 @@
     },
     "MLS_RWS_02": {
       "area": "Malleswaram",
-      "lat": 13.008,
+      "lat": 13.007,
       "lon": 77.576,
       "generation": "5G",
       "band": "n41",
@@ -117,7 +116,7 @@
     },
     "MLS_RWS_03": {
       "area": "Malleswaram",
-      "lat": 13.008,
+      "lat": 13.007,
       "lon": 77.576,
       "generation": "4G",
       "band": "B3",
@@ -133,8 +132,8 @@
     },
     "MLS_18C_01": {
       "area": "Malleswaram",
-      "lat": 13.003,
-      "lon": 77.567,
+      "lat": 13.004,
+      "lon": 77.566,
       "generation": "5G",
       "band": "n78",
       "freq_mhz": 3500,
@@ -149,8 +148,8 @@
     },
     "MLS_18C_02": {
       "area": "Malleswaram",
-      "lat": 13.003,
-      "lon": 77.567,
+      "lat": 13.004,
+      "lon": 77.566,
       "generation": "5G",
       "band": "n41",
       "freq_mhz": 2500,
@@ -165,8 +164,8 @@
     },
     "MLS_18C_03": {
       "area": "Malleswaram",
-      "lat": 13.003,
-      "lon": 77.567,
+      "lat": 13.004,
+      "lon": 77.566,
       "generation": "4G",
       "band": "B3",
       "freq_mhz": 1800,
@@ -182,7 +181,7 @@
     "MLS_BEL_01": {
       "area": "Malleswaram",
       "lat": 13.011,
-      "lon": 77.563,
+      "lon": 77.562,
       "generation": "5G",
       "band": "n78",
       "freq_mhz": 3500,
@@ -198,7 +197,7 @@
     "MLS_BEL_02": {
       "area": "Malleswaram",
       "lat": 13.011,
-      "lon": 77.563,
+      "lon": 77.562,
       "generation": "4G",
       "band": "B40",
       "freq_mhz": 2300,
@@ -214,7 +213,7 @@
     "MLS_BEL_03": {
       "area": "Malleswaram",
       "lat": 13.011,
-      "lon": 77.563,
+      "lon": 77.562,
       "generation": "4G",
       "band": "B3",
       "freq_mhz": 1800,
@@ -229,7 +228,7 @@
     },
     "MLS_SNK_01": {
       "area": "Malleswaram",
-      "lat": 13.006,
+      "lat": 13.004,
       "lon": 77.574,
       "generation": "5G",
       "band": "n78",
@@ -245,7 +244,7 @@
     },
     "MLS_SNK_02": {
       "area": "Malleswaram",
-      "lat": 13.006,
+      "lat": 13.004,
       "lon": 77.574,
       "generation": "5G",
       "band": "n41",
@@ -261,7 +260,7 @@
     },
     "MLS_SNK_03": {
       "area": "Malleswaram",
-      "lat": 13.006,
+      "lat": 13.004,
       "lon": 77.574,
       "generation": "4G",
       "band": "B3",
@@ -277,8 +276,8 @@
     },
     "MLS_SPG_01": {
       "area": "Malleswaram",
-      "lat": 12.999,
-      "lon": 77.57,
+      "lat": 13.0,
+      "lon": 77.571,
       "generation": "5G",
       "band": "n78",
       "freq_mhz": 3500,
@@ -293,8 +292,8 @@
     },
     "MLS_SPG_02": {
       "area": "Malleswaram",
-      "lat": 12.999,
-      "lon": 77.57,
+      "lat": 13.0,
+      "lon": 77.571,
       "generation": "5G",
       "band": "n41",
       "freq_mhz": 2500,
@@ -309,8 +308,8 @@
     },
     "MLS_SPG_03": {
       "area": "Malleswaram",
-      "lat": 12.999,
-      "lon": 77.57,
+      "lat": 13.0,
+      "lon": 77.571,
       "generation": "4G",
       "band": "B3",
       "freq_mhz": 1800,
@@ -325,8 +324,8 @@
     },
     "MLS_3MN_01": {
       "area": "Malleswaram",
-      "lat": 13.001,
-      "lon": 77.56,
+      "lat": 13.0,
+      "lon": 77.558,
       "generation": "5G",
       "band": "n78",
       "freq_mhz": 3500,
@@ -341,8 +340,8 @@
     },
     "MLS_3MN_02": {
       "area": "Malleswaram",
-      "lat": 13.001,
-      "lon": 77.56,
+      "lat": 13.0,
+      "lon": 77.558,
       "generation": "4G",
       "band": "B40",
       "freq_mhz": 2300,
@@ -357,8 +356,8 @@
     },
     "MLS_3MN_03": {
       "area": "Malleswaram",
-      "lat": 13.001,
-      "lon": 77.56,
+      "lat": 13.0,
+      "lon": 77.558,
       "generation": "4G",
       "band": "B3",
       "freq_mhz": 1800,
@@ -373,8 +372,8 @@
     },
     "MLS_10C_01": {
       "area": "Malleswaram",
-      "lat": 13.004,
-      "lon": 77.571,
+      "lat": 13.003,
+      "lon": 77.57,
       "generation": "5G",
       "band": "n78",
       "freq_mhz": 3500,
@@ -389,8 +388,8 @@
     },
     "MLS_10C_02": {
       "area": "Malleswaram",
-      "lat": 13.004,
-      "lon": 77.571,
+      "lat": 13.003,
+      "lon": 77.57,
       "generation": "5G",
       "band": "n41",
       "freq_mhz": 2500,
@@ -405,8 +404,8 @@
     },
     "MLS_10C_03": {
       "area": "Malleswaram",
-      "lat": 13.004,
-      "lon": 77.571,
+      "lat": 13.003,
+      "lon": 77.57,
       "generation": "4G",
       "band": "B3",
       "freq_mhz": 1800,
@@ -422,7 +421,7 @@
     "MLS_MGR_01": {
       "area": "Malleswaram",
       "lat": 12.996,
-      "lon": 77.564,
+      "lon": 77.562,
       "generation": "5G",
       "band": "n78",
       "freq_mhz": 3500,
@@ -438,7 +437,7 @@
     "MLS_MGR_02": {
       "area": "Malleswaram",
       "lat": 12.996,
-      "lon": 77.564,
+      "lon": 77.562,
       "generation": "4G",
       "band": "B40",
       "freq_mhz": 2300,
@@ -454,7 +453,7 @@
     "MLS_MGR_03": {
       "area": "Malleswaram",
       "lat": 12.996,
-      "lon": 77.564,
+      "lon": 77.562,
       "generation": "4G",
       "band": "B3",
       "freq_mhz": 1800,
@@ -469,7 +468,7 @@
     },
     "MLS_CHD_01": {
       "area": "Malleswaram",
-      "lat": 12.993,
+      "lat": 12.994,
       "lon": 77.556,
       "generation": "5G",
       "band": "n78",
@@ -485,7 +484,7 @@
     },
     "MLS_CHD_02": {
       "area": "Malleswaram",
-      "lat": 12.993,
+      "lat": 12.994,
       "lon": 77.556,
       "generation": "4G",
       "band": "B40",
@@ -501,7 +500,7 @@
     },
     "MLS_CHD_03": {
       "area": "Malleswaram",
-      "lat": 12.993,
+      "lat": 12.994,
       "lon": 77.556,
       "generation": "4G",
       "band": "B3",
@@ -518,7 +517,7 @@
     "MLS_6CR_01": {
       "area": "Malleswaram",
       "lat": 12.997,
-      "lon": 77.558,
+      "lon": 77.553,
       "generation": "5G",
       "band": "n78",
       "freq_mhz": 3500,
@@ -534,7 +533,7 @@
     "MLS_6CR_02": {
       "area": "Malleswaram",
       "lat": 12.997,
-      "lon": 77.558,
+      "lon": 77.553,
       "generation": "4G",
       "band": "B40",
       "freq_mhz": 2300,
@@ -550,7 +549,7 @@
     "MLS_6CR_03": {
       "area": "Malleswaram",
       "lat": 12.997,
-      "lon": 77.558,
+      "lon": 77.553,
       "generation": "4G",
       "band": "B3",
       "freq_mhz": 1800,
@@ -562,22 +561,6 @@
       "tx_power_w": 200,
       "idle_power_w": 50,
       "max_ues": 250
-    },
-    "MLS_MGR_NEW_01": {
-      "area": "Malleswaram",
-      "lat": 12.998,
-      "lon": 77.57,
-      "generation": "5G",
-      "band": "n78",
-      "freq_mhz": 3500,
-      "pci": 11,
-      "vendor": "Nokia",
-      "hardware_model": "AirScale MAA 64T64R",
-      "antenna_config": "64T64R",
-      "peak_dl_mbps": 3800,
-      "tx_power_w": 1000,
-      "idle_power_w": 250,
-      "max_ues": 900
     }
   }
 }
