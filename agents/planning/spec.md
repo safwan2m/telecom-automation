@@ -412,10 +412,10 @@ Greedy graph-colouring PCI assignment. Returns `{cell_id: pci}`.
 - For each cell: find the smallest `pci ∈ [0, 1007]` not in neighbour PCIs AND not sharing `pci % 3` with any neighbour PCI.
 - Guarantees collision-free; minimises confusion pairs.
 
-**`validate_plan(cells, pcis) → list[str]`**  
-Returns violation strings for each adjacent pair:
-- **Collision**: both cells have the same PCI.
-- **Confusion**: cells have the same `pci % 3`.
+**`validate_plan(cells, pcis) → dict[str, list[str]]`**  
+Returns `{"collisions": [...], "confusions": [...]}` for adjacent pairs:
+- **Collision** (forbidden): both cells have the same PCI — always 0 after `assign_pcis`.
+- **Confusion** (advisory): cells share `pci % 3` — unavoidable in dense networks; logged but not an error.
 
 ---
 
@@ -553,7 +553,7 @@ per cell    → pci, du_id, cu_id, fronthaul_latency_us, slices (allocate), is_n
 per DU      → cu_id, cell_ids, centroid_lat/lon, midhaul_latency_ms
 per CU      → du_ids, centroid_lat/lon
 ```
-Returns `{cell_plans, du_plans, cu_plans, timing_sync, violations, du_cells}`.
+Returns `{cell_plans, du_plans, cu_plans, timing_sync, violations, pci_confusions, du_cells}`.
 
 ### planner_api.py — planning logic
 

@@ -14,6 +14,7 @@ GET  /cells/suspended   → list currently suspended cells
 GET  /candidates        → list candidate cell inventory
 """
 
+import copy
 import json
 import math
 import os
