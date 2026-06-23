@@ -372,7 +372,8 @@ Returns top `max_cells` candidates by descending score.
 Greedy geographic DU grouping. Returns `{du_id: [cell_ids]}`.
 - Sort cells by `density_weight` descending; each unassigned cell becomes a DU anchor.
 - Other unassigned cells within `FRONTHAUL_RADIUS_KM` (5.0 km) join, up to `max_cells_per_du`.
-- DU IDs: `DU-BLR-01`, `DU-BLR-02`, ... (sequential).
+- DU IDs: `DU-BLR-01`, `DU-BLR-02`, ... (sequential, abstract planning IDs).
+- **Note**: these abstract IDs are remapped to existing infrastructure IDs by `_remap_infrastructure_ids()` before any live topology write.
 
 **`du_centroid(du_id, cell_ids, cell_map) → tuple[float, float]`**  
 Mean (lat, lon) of member cells. Used for midhaul distance computation.
@@ -382,7 +383,7 @@ Greedy geographic CU grouping over DUs. Returns `{cu_id: [du_ids]}`.
 - Compute each DU's centroid (via `du_centroid`).
 - Sort DU IDs alphabetically; each unassigned DU becomes a CU anchor.
 - Other DUs within `MIDHAUL_RADIUS_KM` (25.0 km) join, up to `max_dus_per_cu`.
-- CU IDs: `CU-BLR-01`, `CU-BLR-02`, ...
+- CU IDs: `CU-BLR-01`, `CU-BLR-02`, ... (abstract planning IDs; remapped by `_remap_infrastructure_ids()` before live write).
 
 **`estimate_cost(n_cells, n_dus, n_cus) → float`**  
 `n_cells × 50,000 + n_dus × 30,000 + n_cus × 80,000` (USD).
@@ -588,7 +589,27 @@ Returns plan with `plan_type="reactivate_and_deploy"`, `reactivated_cells=[...]`
 **`plan_to_topology(plan) → dict`**  
 Converts a plan to `topology.json` format for `POST /topology/replace` on Controller.  
 Filters `plan["cells"]` to only include entries where `c.get("active", True)` is truthy — suspended cells (active=False) are excluded.  
-Structure: `{version:1, last_updated, updated_by, cus:{cu_id:{du_ids}}, dus:{du_id:{cu_id, cell_ids}}, cells:{cell_id:{area, pci, lat, lon, band, freq_mhz, max_ues, generation, vendor, hardware_model, antenna_config, tx_power_w, idle_power_w, peak_dl_mbps}}}`.
+Structure: `{version:1, last_updated, updated_by, cus:{cu_id:{du_ids}}, dus:{du_id:{cu_id, cell_ids}}, cells:{cell_id:{area, pci, lat, lon, band, freq_mhz, max_ues, generation, vendor, hardware_model, antenna_config, tx_power_w, idle_power_w, peak_dl_mbps}}}`.  
+**Important**: call `_remap_infrastructure_ids()` on the result before applying to a live deployment so that existing DU/CU hardware IDs are preserved.
+
+**`_remap_infrastructure_ids(plan_topology, plan, existing_topo) → dict`**  
+Merges a plan into the existing topology, preserving infrastructure IDs and all non-plan cells.
+
+A plan frequently covers only a subset of the live network (cells in the queried area). Replacing the whole topology with the plan would delete cells not covered by the plan and overwrite hardware IDs (`DU-MLS-1` etc.) with abstract planner IDs (`DU-BLR-01` etc.).
+
+Algorithm:
+1. If `existing_topo` has no DUs, return `plan_topology` unchanged (fresh deployment).
+2. Start from `deepcopy(existing_topo)` as the base.
+3. Compute Haversine centroids for all existing DUs from their cell lat/lons.
+4. For each plan DU, compute its centroid from `plan_topology["cells"]` and map it to the nearest existing DU.
+5. Remove plan cells (active + suspended) from whichever existing DUs currently hold them.
+6. Remove cells in `plan["suspended_cells"]` from `merged["cells"]`.
+7. Upsert active plan cell configs into `merged["cells"]`.
+8. Append each plan DU's cells to its mapped existing DU's `cell_ids`.
+9. Drop DUs with empty `cell_ids`; rebuild each CU's `du_ids` list from DU `cu_id` assignments; drop CUs with no DUs.
+10. Return merged topology.
+
+Called in `apply_plan()` immediately after `plan_to_topology()`, fetching the current topology via `GET /topology` on the Controller (5 s timeout). On fetch failure the merge is skipped with a WARNING log and the raw plan topology is applied as-is.
 
 ## Plan persistence
 
@@ -682,8 +703,14 @@ GET  /plan/{plan_id}           session cache first, then InfluxDB Flux query
 
 POST /plan/apply
      Body: {plan_id}
-     Action: calls POST /topology/replace on Controller with plan topology.
-             Suspended cells (active=false) are excluded from topology — they live
-             only in InfluxDB until a reactivate plan restores them to a DU's cell_ids.
+     Action: 1. plan_to_topology(plan) — convert plan to topology.json format.
+             2. _remap_infrastructure_ids(plan_topology, plan, GET /topology) —
+                merge plan changes into the existing topology: maps abstract planner
+                DU/CU IDs to existing hardware IDs, keeps all non-plan cells intact,
+                removes suspended cells.  Skipped if Controller is unreachable
+                (WARNING logged; raw plan topology applied as-is).
+             3. POST /topology/replace — write merged topology to Controller.
+             Suspended cells (active=false) are removed from the merged topology and
+             live only in InfluxDB until a reactivate plan restores them.
      Returns: Controller's topology/replace response
 ```

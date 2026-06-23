@@ -887,6 +887,9 @@ def plan_to_topology(plan: dict) -> dict:
     Suspended cells (active=False) are excluded — they exist only in InfluxDB.
     The DU simulator never sees them; they are invisible to the live network
     until a reactivate plan re-adds them to a DU's cell_ids.
+
+    Call _remap_infrastructure_ids() on the result before applying to a live
+    deployment so that existing DU/CU hardware IDs are preserved.
     """
     cus, dus, cells_topo = {}, {}, {}
 
@@ -930,6 +933,112 @@ def plan_to_topology(plan: dict) -> dict:
         "dus":          dus,
         "cells":        cells_topo,
     }
+
+
+def _remap_infrastructure_ids(plan_topology: dict, plan: dict, existing_topo: dict) -> dict:
+    """Merge a plan into the existing topology, preserving infrastructure IDs.
+
+    A plan often covers only a subset of the live network (cells in the queried
+    area).  This function:
+
+      1. Starts from the existing topology (all cells/DUs/CUs intact).
+      2. Removes the plan's cells from whichever DUs they currently sit in.
+      3. Removes cells listed in plan["suspended_cells"] from the topology.
+      4. Maps each plan DU to the geographically nearest existing DU.
+      5. Adds the plan's active cells to their remapped DU's cell_ids list.
+      6. Adds or updates cell configs for plan cells.
+      7. Drops empty DUs and rebuilds each CU's du_ids list.
+
+    If no existing DUs are found (fresh deploy) the plan topology is returned
+    unchanged.
+    """
+    import copy
+
+    existing_dus = existing_topo.get("dus", {})
+    if not existing_dus:
+        return plan_topology  # fresh deploy — no remapping needed
+
+    merged      = copy.deepcopy(existing_topo)
+    plan_cells  = plan_topology.get("cells", {})
+    plan_dus    = plan_topology.get("dus", {})
+    suspended   = set(plan.get("suspended_cells", []))
+
+    def _centroid(cell_ids: list, cell_store: dict):
+        pts = [(cell_store[c]["lat"], cell_store[c]["lon"]) for c in cell_ids if c in cell_store]
+        if not pts:
+            return None
+        return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+
+    # Centroids for existing DUs (from existing cell coords)
+    ex_centroids = {
+        du_id: _centroid(cfg.get("cell_ids", []), merged["cells"])
+        for du_id, cfg in existing_dus.items()
+    }
+    ex_centroids = {k: v for k, v in ex_centroids.items() if v}
+    existing_du_list = list(ex_centroids.keys())
+
+    # Map each plan DU → nearest existing DU by centroid distance
+    du_remap: dict[str, str] = {}
+    for plan_du_id, plan_du_cfg in plan_dus.items():
+        plan_cent = _centroid(plan_du_cfg.get("cell_ids", []), plan_cells)
+        if plan_cent and existing_du_list:
+            nearest = min(
+                existing_du_list,
+                key=lambda eid: haversine_km(plan_cent[0], plan_cent[1], *ex_centroids[eid]),
+            )
+            du_remap[plan_du_id] = nearest
+        else:
+            du_remap[plan_du_id] = plan_du_id
+
+    # Remove plan cells (active + suspended) from their current DU positions
+    all_plan_cell_ids = set(plan_cells.keys()) | suspended
+    for du_cfg in merged["dus"].values():
+        du_cfg["cell_ids"] = [c for c in du_cfg["cell_ids"] if c not in all_plan_cell_ids]
+
+    # Remove suspended cells entirely from the cells dict
+    for cell_id in suspended:
+        merged["cells"].pop(cell_id, None)
+
+    # Add / update active plan cell configs
+    merged["cells"].update(plan_cells)
+
+    # Place plan cells into their remapped DUs
+    for plan_du_id, plan_du_cfg in plan_dus.items():
+        target_du = du_remap.get(plan_du_id, plan_du_id)
+        if target_du in merged["dus"]:
+            existing_non_plan = [c for c in merged["dus"][target_du]["cell_ids"]
+                                 if c not in set(plan_du_cfg["cell_ids"])]
+            merged["dus"][target_du]["cell_ids"] = existing_non_plan + plan_du_cfg["cell_ids"]
+        else:
+            # Target DU doesn't exist yet — create it under the first available CU
+            fallback_cu = next(iter(merged["cus"]), "CU-MLS")
+            merged["dus"][target_du] = {
+                "cu_id":    fallback_cu,
+                "host":     target_du.lower(),
+                "cell_ids": plan_du_cfg["cell_ids"],
+            }
+
+    # Drop newly-added DUs that ended up with no cells, but always keep DUs that
+    # existed before the plan (their simulator is still running and looks itself up).
+    existing_du_ids = set(existing_dus.keys())
+    merged["dus"] = {
+        k: v for k, v in merged["dus"].items()
+        if v.get("cell_ids") or k in existing_du_ids
+    }
+
+    # Rebuild each CU's du_ids from the current DU→CU assignments
+    for cu_id, cu_cfg in merged["cus"].items():
+        cu_cfg["du_ids"] = [du_id for du_id, du_cfg in merged["dus"].items()
+                            if du_cfg.get("cu_id") == cu_id]
+
+    # Drop CUs that own no DUs (only if they weren't in existing topology)
+    existing_cu_ids = set(existing_topo.get("cus", {}).keys())
+    merged["cus"] = {
+        k: v for k, v in merged["cus"].items()
+        if v.get("du_ids") or k in existing_cu_ids
+    }
+
+    return merged
 
 
 # ── Input validation ─────────────────────────────────────────────────────────
@@ -1063,6 +1172,17 @@ def apply_plan(req: ApplyRequest):
         raise HTTPException(404, f"Plan {req.plan_id} not found")
 
     topology = plan_to_topology(plan)
+
+    # Merge plan changes into the existing topology, preserving infrastructure IDs.
+    # This maps abstract planner DU/CU IDs (e.g. DU-BLR-01) to hardware IDs
+    # (e.g. DU-MLS-1) and keeps all non-plan cells intact so simulators keep working.
+    try:
+        ex = httpx.get(f"{CONTROLLER_URL}/topology", timeout=5.0)
+        if ex.status_code == 200:
+            topology = _remap_infrastructure_ids(topology, plan, ex.json())
+    except Exception as exc:
+        log.warning("ID remap skipped (topology fetch failed): %s", exc)
+
     try:
         resp = httpx.post(f"{CONTROLLER_URL}/topology/replace", json=topology, timeout=10.0)
         resp.raise_for_status()

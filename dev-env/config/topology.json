@@ -1,127 +1,57 @@
 {
-  "version": 2,
-  "last_updated": "2026-06-22T14:56:12.427667+00:00",
+  "version": 1784,
+  "last_updated": "2026-06-23T16:22:06.490053+00:00",
   "updated_by": "planning-api:apply",
+  "meta": {
+    "city": "Bangalore",
+    "zone": "Malleswaram",
+    "areas": [
+      "Malleswaram"
+    ],
+    "area_population": 40000,
+    "area_population_with_commuters": 46000,
+    "commuter_overhead_pct": 15,
+    "operator_market_share_pct": 40,
+    "active_ues_peak": 18400,
+    "erlang_busy_hour": 460,
+    "erlang_per_cell_target": 16,
+    "cells_required": 30,
+    "note": "30 cells (10 macro towers x 3 sectors each) covering Malleswaram. Population 40,000 + 15% commuter overhead (railway station transit hub) = 46,000. Tier-1 operator 40% market share -> 18,400 peak active UEs. 460 Erlangs busy-hour / 16 Erlangs per sector (Erlang-C, 2% blocking) = 28.75 -> 30 sectors.",
+    "ran_mode": "4G/5G NSA",
+    "core": "NSA \u2014 5G NR anchored on LTE, shared AMF/SMF/UPF"
+  },
   "cus": {
-    "CU-BLR-01": {
-      "host": "cu-blr-01",
-      "region": "Malleswaram 18th Cross",
+    "CU-MLS": {
+      "host": "cu-mls",
+      "region": "Malleswaram",
       "du_ids": [
-        "DU-BLR-01",
-        "DU-BLR-02",
-        "DU-BLR-03",
-        "DU-BLR-04"
-      ]
-    },
-    "CU-BLR-02": {
-      "host": "cu-blr-02",
-      "region": "Malleswaram 18th Cross",
-      "du_ids": [
-        "DU-BLR-05",
-        "DU-BLR-06",
-        "DU-BLR-07",
-        "DU-BLR-08"
-      ]
-    },
-    "CU-BLR-03": {
-      "host": "cu-blr-03",
-      "region": "Malleswaram 18th Cross",
-      "du_ids": [
-        "DU-BLR-09",
-        "DU-BLR-10"
+        "DU-MLS-1",
+        "DU-MLS-2",
+        "DU-MLS-3"
       ]
     }
   },
   "dus": {
-    "DU-BLR-01": {
-      "cu_id": "CU-BLR-01",
-      "host": "du-blr-01",
+    "DU-MLS-1": {
+      "cu_id": "CU-MLS",
+      "host": "du-mls-1",
       "cell_ids": [
         "MLS_RWS_01",
-        "MLS_RWS_02",
-        "MLS_RWS_03"
-      ]
-    },
-    "DU-BLR-02": {
-      "cu_id": "CU-BLR-01",
-      "host": "du-blr-02",
-      "cell_ids": [
         "MLS_18C_01",
-        "MLS_18C_02",
-        "MLS_18C_03"
-      ]
-    },
-    "DU-BLR-03": {
-      "cu_id": "CU-BLR-01",
-      "host": "du-blr-03",
-      "cell_ids": [
         "MLS_BEL_01",
-        "MLS_BEL_02",
-        "MLS_BEL_03"
-      ]
-    },
-    "DU-BLR-04": {
-      "cu_id": "CU-BLR-01",
-      "host": "du-blr-04",
-      "cell_ids": [
         "MLS_SNK_01",
-        "MLS_SNK_02",
-        "MLS_SNK_03"
+        "MLS_SPG_01"
       ]
     },
-    "DU-BLR-05": {
-      "cu_id": "CU-BLR-02",
-      "host": "du-blr-05",
-      "cell_ids": [
-        "MLS_SPG_01",
-        "MLS_SPG_02",
-        "MLS_SPG_03"
-      ]
+    "DU-MLS-2": {
+      "cu_id": "CU-MLS",
+      "host": "du-mls-2",
+      "cell_ids": []
     },
-    "DU-BLR-06": {
-      "cu_id": "CU-BLR-02",
-      "host": "du-blr-06",
-      "cell_ids": [
-        "MLS_3MN_01",
-        "MLS_3MN_02",
-        "MLS_3MN_03"
-      ]
-    },
-    "DU-BLR-07": {
-      "cu_id": "CU-BLR-02",
-      "host": "du-blr-07",
-      "cell_ids": [
-        "MLS_10C_01",
-        "MLS_10C_02",
-        "MLS_10C_03"
-      ]
-    },
-    "DU-BLR-08": {
-      "cu_id": "CU-BLR-02",
-      "host": "du-blr-08",
-      "cell_ids": [
-        "MLS_MGR_01",
-        "MLS_MGR_02",
-        "MLS_MGR_03"
-      ]
-    },
-    "DU-BLR-09": {
-      "cu_id": "CU-BLR-03",
-      "host": "du-blr-09",
-      "cell_ids": [
-        "MLS_CHD_01",
-        "MLS_CHD_02",
-        "MLS_CHD_03"
-      ]
-    },
-    "DU-BLR-10": {
-      "cu_id": "CU-BLR-03",
-      "host": "du-blr-10",
-      "cell_ids": [
-        "MLS_6CR_01",
-        "MLS_6CR_02",
-        "MLS_6CR_03"
-      ]
+    "DU-MLS-3": {
+      "cu_id": "CU-MLS",
+      "host": "du-mls-3",
+      "cell_ids": []
     }
   },
   "cells": {
@@ -141,38 +71,6 @@
       "idle_power_w": 250,
       "peak_dl_mbps": 3800
     },
-    "MLS_RWS_02": {
-      "area": "Malleswaram",
-      "pci": 101,
-      "lat": 13.007,
-      "lon": 77.576,
-      "band": "n41",
-      "freq_mhz": 2500,
-      "max_ues": 700,
-      "generation": "5G",
-      "vendor": "Nokia",
-      "hardware_model": "AirScale MAA 64T64R",
-      "antenna_config": "64T64R",
-      "tx_power_w": 1000,
-      "idle_power_w": 250,
-      "peak_dl_mbps": 3000
-    },
-    "MLS_RWS_03": {
-      "area": "Malleswaram",
-      "pci": 201,
-      "lat": 13.007,
-      "lon": 77.576,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Nokia",
-      "hardware_model": "AWHFA",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
     "MLS_18C_01": {
       "area": "Malleswaram",
       "pci": 2,
@@ -188,38 +86,6 @@
       "tx_power_w": 950,
       "idle_power_w": 237,
       "peak_dl_mbps": 3600
-    },
-    "MLS_18C_02": {
-      "area": "Malleswaram",
-      "pci": 102,
-      "lat": 13.004,
-      "lon": 77.566,
-      "band": "n41",
-      "freq_mhz": 2500,
-      "max_ues": 700,
-      "generation": "5G",
-      "vendor": "Ericsson",
-      "hardware_model": "AIR 6449",
-      "antenna_config": "64T64R",
-      "tx_power_w": 950,
-      "idle_power_w": 237,
-      "peak_dl_mbps": 2800
-    },
-    "MLS_18C_03": {
-      "area": "Malleswaram",
-      "pci": 202,
-      "lat": 13.004,
-      "lon": 77.566,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Ericsson",
-      "hardware_model": "RBS 6402",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
     },
     "MLS_BEL_01": {
       "area": "Malleswaram",
@@ -237,38 +103,6 @@
       "idle_power_w": 225,
       "peak_dl_mbps": 3400
     },
-    "MLS_BEL_02": {
-      "area": "Malleswaram",
-      "pci": 301,
-      "lat": 13.011,
-      "lon": 77.562,
-      "band": "B40",
-      "freq_mhz": 2300,
-      "max_ues": 300,
-      "generation": "4G",
-      "vendor": "Samsung",
-      "hardware_model": "RRU",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_BEL_03": {
-      "area": "Malleswaram",
-      "pci": 203,
-      "lat": 13.011,
-      "lon": 77.562,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Samsung",
-      "hardware_model": "RRU",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
     "MLS_SNK_01": {
       "area": "Malleswaram",
       "pci": 4,
@@ -285,38 +119,6 @@
       "idle_power_w": 250,
       "peak_dl_mbps": 3200
     },
-    "MLS_SNK_02": {
-      "area": "Malleswaram",
-      "pci": 103,
-      "lat": 13.004,
-      "lon": 77.574,
-      "band": "n41",
-      "freq_mhz": 2500,
-      "max_ues": 700,
-      "generation": "5G",
-      "vendor": "ZTE",
-      "hardware_model": "AAU 5614",
-      "antenna_config": "64T64R",
-      "tx_power_w": 1000,
-      "idle_power_w": 250,
-      "peak_dl_mbps": 2600
-    },
-    "MLS_SNK_03": {
-      "area": "Malleswaram",
-      "pci": 204,
-      "lat": 13.004,
-      "lon": 77.574,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "ZTE",
-      "hardware_model": "RRU",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
     "MLS_SPG_01": {
       "area": "Malleswaram",
       "pci": 5,
@@ -332,296 +134,6 @@
       "tx_power_w": 1000,
       "idle_power_w": 250,
       "peak_dl_mbps": 3800
-    },
-    "MLS_SPG_02": {
-      "area": "Malleswaram",
-      "pci": 104,
-      "lat": 13.0,
-      "lon": 77.571,
-      "band": "n41",
-      "freq_mhz": 2500,
-      "max_ues": 700,
-      "generation": "5G",
-      "vendor": "Nokia",
-      "hardware_model": "AirScale MAA 64T64R",
-      "antenna_config": "64T64R",
-      "tx_power_w": 1000,
-      "idle_power_w": 250,
-      "peak_dl_mbps": 3000
-    },
-    "MLS_SPG_03": {
-      "area": "Malleswaram",
-      "pci": 205,
-      "lat": 13.0,
-      "lon": 77.571,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Nokia",
-      "hardware_model": "AWHFA",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_3MN_01": {
-      "area": "Malleswaram",
-      "pci": 6,
-      "lat": 13.0,
-      "lon": 77.558,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 900,
-      "generation": "5G",
-      "vendor": "Ericsson",
-      "hardware_model": "AIR 6449",
-      "antenna_config": "64T64R",
-      "tx_power_w": 950,
-      "idle_power_w": 237,
-      "peak_dl_mbps": 3600
-    },
-    "MLS_3MN_02": {
-      "area": "Malleswaram",
-      "pci": 302,
-      "lat": 13.0,
-      "lon": 77.558,
-      "band": "B40",
-      "freq_mhz": 2300,
-      "max_ues": 300,
-      "generation": "4G",
-      "vendor": "Ericsson",
-      "hardware_model": "RBS 6402",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_3MN_03": {
-      "area": "Malleswaram",
-      "pci": 206,
-      "lat": 13.0,
-      "lon": 77.558,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Ericsson",
-      "hardware_model": "RBS 6402",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_10C_01": {
-      "area": "Malleswaram",
-      "pci": 7,
-      "lat": 13.003,
-      "lon": 77.57,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 900,
-      "generation": "5G",
-      "vendor": "Samsung",
-      "hardware_model": "TM500 64T64R",
-      "antenna_config": "64T64R",
-      "tx_power_w": 900,
-      "idle_power_w": 225,
-      "peak_dl_mbps": 3400
-    },
-    "MLS_10C_02": {
-      "area": "Malleswaram",
-      "pci": 105,
-      "lat": 13.003,
-      "lon": 77.57,
-      "band": "n41",
-      "freq_mhz": 2500,
-      "max_ues": 700,
-      "generation": "5G",
-      "vendor": "Samsung",
-      "hardware_model": "TM500 64T64R",
-      "antenna_config": "64T64R",
-      "tx_power_w": 900,
-      "idle_power_w": 225,
-      "peak_dl_mbps": 2400
-    },
-    "MLS_10C_03": {
-      "area": "Malleswaram",
-      "pci": 207,
-      "lat": 13.003,
-      "lon": 77.57,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Samsung",
-      "hardware_model": "RRU",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_MGR_01": {
-      "area": "Malleswaram",
-      "pci": 8,
-      "lat": 12.996,
-      "lon": 77.562,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 900,
-      "generation": "5G",
-      "vendor": "ZTE",
-      "hardware_model": "AAU 5614",
-      "antenna_config": "64T64R",
-      "tx_power_w": 1000,
-      "idle_power_w": 250,
-      "peak_dl_mbps": 3200
-    },
-    "MLS_MGR_02": {
-      "area": "Malleswaram",
-      "pci": 303,
-      "lat": 12.996,
-      "lon": 77.562,
-      "band": "B40",
-      "freq_mhz": 2300,
-      "max_ues": 300,
-      "generation": "4G",
-      "vendor": "ZTE",
-      "hardware_model": "RRU",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_MGR_03": {
-      "area": "Malleswaram",
-      "pci": 208,
-      "lat": 12.996,
-      "lon": 77.562,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "ZTE",
-      "hardware_model": "RRU",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_CHD_01": {
-      "area": "Malleswaram",
-      "pci": 9,
-      "lat": 12.994,
-      "lon": 77.556,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 900,
-      "generation": "5G",
-      "vendor": "Nokia",
-      "hardware_model": "AirScale MAA 64T64R",
-      "antenna_config": "64T64R",
-      "tx_power_w": 1000,
-      "idle_power_w": 250,
-      "peak_dl_mbps": 3800
-    },
-    "MLS_CHD_02": {
-      "area": "Malleswaram",
-      "pci": 304,
-      "lat": 12.994,
-      "lon": 77.556,
-      "band": "B40",
-      "freq_mhz": 2300,
-      "max_ues": 300,
-      "generation": "4G",
-      "vendor": "Nokia",
-      "hardware_model": "AWHFA",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_CHD_03": {
-      "area": "Malleswaram",
-      "pci": 209,
-      "lat": 12.994,
-      "lon": 77.556,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Nokia",
-      "hardware_model": "AWHFA",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_6CR_01": {
-      "area": "Malleswaram",
-      "pci": 10,
-      "lat": 12.997,
-      "lon": 77.553,
-      "band": "n78",
-      "freq_mhz": 3500,
-      "max_ues": 900,
-      "generation": "5G",
-      "vendor": "Ericsson",
-      "hardware_model": "AIR 6449",
-      "antenna_config": "64T64R",
-      "tx_power_w": 950,
-      "idle_power_w": 237,
-      "peak_dl_mbps": 3600
-    },
-    "MLS_6CR_02": {
-      "area": "Malleswaram",
-      "pci": 305,
-      "lat": 12.997,
-      "lon": 77.553,
-      "band": "B40",
-      "freq_mhz": 2300,
-      "max_ues": 300,
-      "generation": "4G",
-      "vendor": "Ericsson",
-      "hardware_model": "RBS 6402",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
-    },
-    "MLS_6CR_03": {
-      "area": "Malleswaram",
-      "pci": 210,
-      "lat": 12.997,
-      "lon": 77.553,
-      "band": "B3",
-      "freq_mhz": 1800,
-      "max_ues": 250,
-      "generation": "4G",
-      "vendor": "Ericsson",
-      "hardware_model": "RBS 6402",
-      "antenna_config": "4T4R",
-      "tx_power_w": 200,
-      "idle_power_w": 50,
-      "peak_dl_mbps": 150
     }
-  },
-  "meta": {
-    "city": "Bangalore",
-    "zone": "Malleswaram",
-    "areas": [
-      "Malleswaram"
-    ],
-    "area_population": 40000,
-    "area_population_with_commuters": 46000,
-    "commuter_overhead_pct": 15,
-    "operator_market_share_pct": 40,
-    "active_ues_peak": 18400,
-    "erlang_busy_hour": 460,
-    "erlang_per_cell_target": 16,
-    "cells_required": 30,
-    "note": "30 cells (10 macro towers x 3 sectors each) covering Malleswaram. Population 40,000 + 15% commuter overhead (railway station transit hub) = 46,000. Tier-1 operator 40% market share -> 18,400 peak active UEs. 460 Erlangs busy-hour / 16 Erlangs per sector (Erlang-C, 2% blocking) = 28.75 -> 30 sectors.",
-    "ran_mode": "4G/5G NSA",
-    "core": "NSA \u2014 5G NR anchored on LTE, shared AMF/SMF/UPF"
   }
 }
